@@ -29,7 +29,10 @@
 
     button { padding: 8px 12px; }
     .hint { color: #555; font-size: 14px; }
-    .status { margin-left: auto; font-size: 12px; color: #333; opacity: 0.85; }
+
+    /* status único mas com duas linhas */
+    .status { margin-left: auto; font-size: 12px; color: #333; opacity: 0.85; display: flex; flex-direction: column; gap: 2px; }
+    .status-line { white-space: nowrap; }
   </style>
 </head>
 
@@ -38,7 +41,12 @@
     <button id="btnClear">Limpar</button>
     <button id="btn3d">Ver 3D</button>
     <span class="hint">Ferramenta Retângulo: clique + arrastar no 2D. Depois ajusta pelos cantos.</span>
-    <span class="status" id="status">status: a iniciar…</span>
+
+    <!-- STATUS: duas linhas dentro do mesmo container -->
+    <span class="status" id="status">
+      <span class="status-line" id="status2d">2D: a iniciar…</span>
+      <span class="status-line" id="status3d">3D: a iniciar…</span>
+    </span>
   </header>
 
   <main>
@@ -61,11 +69,16 @@
     // =========================
     // BOOT / DEBUG
     // =========================
-    const statusEl = document.getElementById("status");
+    const status2dEl = document.getElementById("status2d");
+    const status3dEl = document.getElementById("status3d");
     const btnClear = document.getElementById("btnClear");
     const btn3d = document.getElementById("btn3d");
-    function setStatus(t) { statusEl.textContent = "status: " + t; }
-    setStatus("script a correr ✅");
+
+    function setStatus2D(t) { status2dEl.textContent = "2D: " + t; }
+    function setStatus3D(t) { status3dEl.textContent = "3D: " + t; }
+
+    setStatus2D("script a correr ✅");
+    setStatus3D("a iniciar…");
 
     // =========================
     // 1) EDITOR 2D (SVG) - RECT TOOL
@@ -175,7 +188,7 @@
       rectData.h = 0;
 
       applyRectToSVG();
-      setStatus("a desenhar retângulo…");
+      setStatus2D("a desenhar retângulo…");
     }
 
     function updateDrawing(p) {
@@ -185,7 +198,7 @@
       rectData.w = r.w;
       rectData.h = r.h;
       applyRectToSVG();
-      setStatus(`rect: w=${rectData.w.toFixed(2)} h=${rectData.h.toFixed(2)}`);
+      setStatus2D(`rect: w=${rectData.w.toFixed(2)} h=${rectData.h.toFixed(2)}`);
     }
 
     function beginResize(handleIndex, p) {
@@ -193,7 +206,7 @@
       activeHandle = handleIndex;
       baseRect = { ...rectData };
       start = p;
-      setStatus("a redimensionar…");
+      setStatus2D("a redimensionar…");
     }
 
     function updateResize(p) {
@@ -214,7 +227,7 @@
       rectData.w = r.w;
       rectData.h = r.h;
       applyRectToSVG();
-      setStatus(`rect: w=${rectData.w.toFixed(2)} h=${rectData.h.toFixed(2)}`);
+      setStatus2D(`rect: w=${rectData.w.toFixed(2)} h=${rectData.h.toFixed(2)}`);
     }
 
     function endAction() {
@@ -228,8 +241,8 @@
       }
       applyRectToSVG();
 
-      if (rectData.exists) setStatus("pronto ✅ retângulo criado");
-      else setStatus("pronto ✅");
+      if (rectData.exists) setStatus2D("pronto ✅ retângulo criado");
+      else setStatus2D("pronto ✅");
     }
 
     bg.addEventListener("pointerdown", (evt) => {
@@ -273,17 +286,17 @@
     });
 
     // ======== LIMPAR (sempre funcional, antes do 3D) ========
-    // clear3D existe mais abaixo; aqui usamos uma função “safe”.
     function clearAll() {
       rectData.exists = false;
       applyRectToSVG();
       if (typeof clear3D === "function") clear3D();
-      setStatus("limpo ✅");
+      setStatus2D("limpo ✅");
+      setStatus3D("limpo ✅");
     }
     btnClear.addEventListener("click", clearAll);
 
     applyRectToSVG();
-    setStatus("pronto ✅ desenha um retângulo");
+    setStatus2D("pronto ✅ desenha um retângulo");
 
     // =========================
     // 2) PREVIEW 3D (Three.js) - SEM MATAR O APP
@@ -293,14 +306,13 @@
 
     function init3D() {
       try {
-        // Diagnóstico sem crash
         if (!window.THREE) {
-          setStatus("ERRO 3D: THREE não carregou (CDN)");
+          setStatus3D("ERRO: THREE não carregou (CDN)");
           btn3d.disabled = true;
           return;
         }
         if (!THREE.OrbitControls) {
-          setStatus("ERRO 3D: OrbitControls não carregou");
+          setStatus3D("ERRO: OrbitControls não carregou");
           btn3d.disabled = true;
           return;
         }
@@ -345,15 +357,14 @@
         }
         animate();
 
-        setStatus("3D pronto ✅ desenha e clica 'Ver 3D'");
+        setStatus3D("pronto ✅ clica 'Ver 3D'");
       } catch (e) {
         console.error(e);
-        setStatus("ERRO 3D: " + (e?.message || "desconhecido"));
+        setStatus3D("ERRO: " + (e?.message || "desconhecido"));
         btn3d.disabled = true;
       }
     }
 
-    // clear3D agora existe (usado pelo botão Limpar)
     function clear3D() {
       if (!scene || !currentMesh) return;
       scene.remove(currentMesh);
@@ -388,7 +399,7 @@
 
     btn3d.addEventListener("click", () => {
       if (!scene || !renderer || !camera || !controls) {
-        setStatus("3D ainda não inicializou (ver erro acima)");
+        setStatus3D("ainda não inicializou (ver erro acima)");
         return;
       }
 
@@ -405,10 +416,9 @@
       camera.position.set(12, 10, 12);
       controls.update();
 
-      setStatus("3D gerado ✅");
+      setStatus3D("gerado ✅");
     });
 
-    // Inicializa 3D no fim (não bloqueia o 2D)
     init3D();
   </script>
 </body>
