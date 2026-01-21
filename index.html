@@ -63,7 +63,7 @@
 
   <!-- Three.js (classic) -->
   <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/controls/OrbitControls.js"></script>
+  <!-- REMOVIDO: OrbitControls (estava a falhar no teu ambiente) -->
 
   <script>
     // =========================
@@ -299,10 +299,30 @@
     setStatus2D("pronto ✅ desenha um retângulo");
 
     // =========================
-    // 2) PREVIEW 3D (Three.js) - SEM MATAR O APP
+    // 2) PREVIEW 3D (Three.js) - CONTROLOS SIMPLES (SEM OrbitControls)
     // =========================
     const container = document.getElementById("three3d");
-    let scene, camera, renderer, controls, currentMesh;
+    let scene, camera, renderer, currentMesh;
+
+    // câmara orbit simples
+    const camState = {
+      target: null,
+      radius: 18,
+      theta: Math.PI / 4, // horizontal
+      phi: Math.PI / 3    // vertical
+    };
+
+    function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+
+    function updateCamera() {
+      const sinPhi = Math.sin(camState.phi);
+      const x = camState.target.x + camState.radius * sinPhi * Math.cos(camState.theta);
+      const z = camState.target.z + camState.radius * sinPhi * Math.sin(camState.theta);
+      const y = camState.target.y + camState.radius * Math.cos(camState.phi);
+
+      camera.position.set(x, y, z);
+      camera.lookAt(camState.target);
+    }
 
     function init3D() {
       try {
@@ -311,31 +331,25 @@
           btn3d.disabled = true;
           return;
         }
-        if (!THREE.OrbitControls) {
-          setStatus3D("ERRO: OrbitControls não carregou");
-          btn3d.disabled = true;
-          return;
-        }
 
         scene = new THREE.Scene();
         scene.background = new THREE.Color(0xf7f7f7);
 
-        camera = new THREE.PerspectiveCamera(60, 1, 0.1, 1000);
-        camera.position.set(12, 10, 12);
-
+        camera = new THREE.PerspectiveCamera(60, 1, 0.1, 2000);
         renderer = new THREE.WebGLRenderer({ antialias: true });
         container.appendChild(renderer.domElement);
 
-        controls = new THREE.OrbitControls(camera, renderer.domElement);
-        controls.target.set(0, 1.5, 0);
-        controls.update();
+        camState.target = new THREE.Vector3(0, 1.5, 0);
+        updateCamera();
 
+        // luzes
         scene.add(new THREE.AmbientLight(0xffffff, 0.7));
         const dir = new THREE.DirectionalLight(0xffffff, 0.7);
         dir.position.set(10, 20, 10);
         scene.add(dir);
 
-        scene.add(new THREE.GridHelper(50, 50));
+        // helpers
+        scene.add(new THREE.GridHelper(100, 100));
         scene.add(new THREE.AxesHelper(5));
 
         currentMesh = null;
@@ -351,13 +365,47 @@
         setTimeout(resizeRenderer, 0);
         window.addEventListener("resize", resizeRenderer);
 
+        // controlos do rato
+        let dragging = false;
+        let lastX = 0, lastY = 0;
+
+        renderer.domElement.addEventListener("pointerdown", (e) => {
+          dragging = true;
+          lastX = e.clientX;
+          lastY = e.clientY;
+          renderer.domElement.setPointerCapture(e.pointerId);
+        });
+
+        renderer.domElement.addEventListener("pointermove", (e) => {
+          if (!dragging) return;
+          const dx = e.clientX - lastX;
+          const dy = e.clientY - lastY;
+          lastX = e.clientX;
+          lastY = e.clientY;
+
+          camState.theta -= dx * 0.01;
+          camState.phi = clamp(camState.phi + dy * 0.01, 0.15, Math.PI - 0.15);
+          updateCamera();
+        });
+
+        window.addEventListener("pointerup", () => {
+          dragging = false;
+        });
+
+        renderer.domElement.addEventListener("wheel", (e) => {
+          e.preventDefault();
+          const delta = Math.sign(e.deltaY);
+          camState.radius = clamp(camState.radius + delta * 1.2, 2, 200);
+          updateCamera();
+        }, { passive: false });
+
         function animate() {
           requestAnimationFrame(animate);
           renderer.render(scene, camera);
         }
         animate();
 
-        setStatus3D("pronto ✅ clica 'Ver 3D'");
+        setStatus3D("pronto ✅ (sem OrbitControls) — clica 'Ver 3D'");
       } catch (e) {
         console.error(e);
         setStatus3D("ERRO: " + (e?.message || "desconhecido"));
@@ -398,8 +446,8 @@
     }
 
     btn3d.addEventListener("click", () => {
-      if (!scene || !renderer || !camera || !controls) {
-        setStatus3D("ainda não inicializou (ver erro acima)");
+      if (!scene || !renderer || !camera) {
+        setStatus3D("ainda não inicializou");
         return;
       }
 
@@ -412,9 +460,12 @@
       currentMesh = buildExtrudedRect3D(rectData, 3);
       scene.add(currentMesh);
 
-      controls.target.set(0, 1.5, 0);
-      camera.position.set(12, 10, 12);
-      controls.update();
+      // reset camera
+      camState.target.set(0, 1.5, 0);
+      camState.radius = 18;
+      camState.theta = Math.PI / 4;
+      camState.phi = Math.PI / 3;
+      updateCamera();
 
       setStatus3D("gerado ✅");
     });
