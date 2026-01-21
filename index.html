@@ -52,9 +52,9 @@
     </div>
   </main>
 
-  <!-- Three.js (classic) -->
-  <script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
-  <script src="https://unpkg.com/three@0.160.0/examples/js/controls/OrbitControls.js"></script>
+  <!-- Three.js (classic) - CDN mais fiável -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/controls/OrbitControls.js"></script>
 
   <script>
     // =========================
@@ -144,12 +144,11 @@
       rectEl.setAttribute("width", rectData.w);
       rectEl.setAttribute("height", rectData.h);
 
-      // cantos: (x,y), (x+w,y), (x+w,y+h), (x,y+h)
       const corners = [
-        { x: rectData.x,           y: rectData.y },
-        { x: rectData.x+rectData.w, y: rectData.y },
-        { x: rectData.x+rectData.w, y: rectData.y+rectData.h },
-        { x: rectData.x,           y: rectData.y+rectData.h },
+        { x: rectData.x,             y: rectData.y },
+        { x: rectData.x + rectData.w, y: rectData.y },
+        { x: rectData.x + rectData.w, y: rectData.y + rectData.h },
+        { x: rectData.x,             y: rectData.y + rectData.h },
       ];
 
       corners.forEach((p, i) => {
@@ -163,7 +162,7 @@
 
     // Estados de interação
     let mode = "idle"; // idle | drawing | resizing
-    let start = null;  // ponto inicial do desenho
+    let start = null;
     let activeHandle = -1;
     let baseRect = null;
 
@@ -197,23 +196,16 @@
     }
 
     function updateResize(p) {
-      // cantos da base
       const x0 = baseRect.x;
       const y0 = baseRect.y;
       const x1 = baseRect.x + baseRect.w;
       const y1 = baseRect.y + baseRect.h;
 
-      // Escolhe qual canto é “fixo” e qual mexe
-      // handle 0: top-left (fixo bottom-right)
-      // handle 1: top-right (fixo bottom-left)
-      // handle 2: bottom-right (fixo top-left)
-      // handle 3: bottom-left (fixo top-right)
       let fixed, moving;
-
-      if (activeHandle === 0) { fixed = {x:x1,y:y1}; moving = p; }
-      if (activeHandle === 1) { fixed = {x:x0,y:y1}; moving = p; }
-      if (activeHandle === 2) { fixed = {x:x0,y:y0}; moving = p; }
-      if (activeHandle === 3) { fixed = {x:x1,y:y0}; moving = p; }
+      if (activeHandle === 0) { fixed = { x: x1, y: y1 }; moving = p; }
+      if (activeHandle === 1) { fixed = { x: x0, y: y1 }; moving = p; }
+      if (activeHandle === 2) { fixed = { x: x0, y: y0 }; moving = p; }
+      if (activeHandle === 3) { fixed = { x: x1, y: y0 }; moving = p; }
 
       const r = normalizeRect(fixed.x, fixed.y, moving.x, moving.y);
       rectData.x = r.x;
@@ -229,25 +221,21 @@
       activeHandle = -1;
       baseRect = null;
 
-      // se ficou demasiado pequeno, apaga
       if (rectData.exists && (rectData.w < 0.01 || rectData.h < 0.01)) {
         rectData.exists = false;
       }
       applyRectToSVG();
     }
 
-    // Clique no fundo = desenhar novo retângulo
     bg.addEventListener("pointerdown", (evt) => {
       evt.preventDefault();
       const p = svgPointFromMouse(evt);
       if (!p) return;
 
-      // Se clicares fora do retângulo, começa um novo
       beginDrawing(p);
       svg.setPointerCapture(evt.pointerId);
     });
 
-    // Se clicares num handle = resize
     handles.forEach((h, idx) => {
       h.addEventListener("pointerdown", (evt) => {
         evt.preventDefault();
@@ -279,60 +267,64 @@
       try { svg.releasePointerCapture(evt.pointerId); } catch {}
     });
 
-    document.getElementById("btnClear").addEventListener("click", () => {
-      rectData.exists = false;
-      applyRectToSVG();
-      clear3D();
-      setStatus("limpo ✅");
-    });
-
-    applyRectToSVG();
-    setStatus("pronto ✅ desenha um retângulo");
-
     // =========================
-    // 2) PREVIEW 3D (Three.js)
+    // 2) PREVIEW 3D (Three.js) - ROBUSTO
     // =========================
+    // Diagnóstico para não ficar “silencioso”
+    if (!window.THREE) {
+      setStatus("ERRO: THREE não carregou (verifica os <script src=...>)");
+      throw new Error("THREE não carregou");
+    }
+    if (!THREE.OrbitControls) {
+      setStatus("ERRO: OrbitControls não carregou (script OrbitControls falhou)");
+      throw new Error("OrbitControls não carregou");
+    }
+
     const container = document.getElementById("three3d");
     const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0xf7f7f7);
 
-    const camera = new THREE.PerspectiveCamera(
-      60,
-      container.clientWidth / container.clientHeight,
-      0.1,
-      1000
-    );
+    const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 1000);
     camera.position.set(12, 10, 12);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true });
-    renderer.setSize(container.clientWidth, container.clientHeight);
     container.appendChild(renderer.domElement);
 
     const controls = new THREE.OrbitControls(camera, renderer.domElement);
     controls.target.set(0, 1.5, 0);
     controls.update();
 
-    scene.add(new THREE.AmbientLight(0xffffff, 0.6));
-    const dir = new THREE.DirectionalLight(0xffffff, 0.6);
+    scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+    const dir = new THREE.DirectionalLight(0xffffff, 0.7);
     dir.position.set(10, 20, 10);
     scene.add(dir);
 
-    const grid = new THREE.GridHelper(50, 50);
-    scene.add(grid);
+    scene.add(new THREE.GridHelper(50, 50));
+    scene.add(new THREE.AxesHelper(5));
 
     let currentMesh = null;
 
     function clear3D() {
-      if (currentMesh) {
-        scene.remove(currentMesh);
-        currentMesh.geometry.dispose();
-        currentMesh.material.dispose();
-        currentMesh = null;
-      }
+      if (!currentMesh) return;
+      scene.remove(currentMesh);
+      currentMesh.geometry.dispose();
+      currentMesh.material.dispose();
+      currentMesh = null;
     }
 
+    function resizeRenderer() {
+      const w = container.clientWidth || 1;
+      const h = container.clientHeight || 1;
+      renderer.setSize(w, h);
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+    }
+
+    resizeRenderer();
+    setTimeout(resizeRenderer, 0);
+    window.addEventListener("resize", resizeRenderer);
+
     function buildExtrudedRect3D(r, height = 3) {
-      // Retângulo 2D: (x,y,w,h)
-      // Vamos criar um Shape com 4 pontos
       const shape = new THREE.Shape();
       shape.moveTo(r.x, r.y);
       shape.lineTo(r.x + r.w, r.y);
@@ -340,17 +332,12 @@
       shape.lineTo(r.x, r.y + r.h);
       shape.closePath();
 
-      const geo = new THREE.ExtrudeGeometry(shape, {
-        depth: height,
-        bevelEnabled: false
-      });
-
+      const geo = new THREE.ExtrudeGeometry(shape, { depth: height, bevelEnabled: false });
       geo.rotateX(Math.PI / 2);
 
       const mat = new THREE.MeshStandardMaterial();
       const mesh = new THREE.Mesh(geo, mat);
 
-      // Centrar
       geo.computeBoundingBox();
       const bb = geo.boundingBox;
       const cx = (bb.min.x + bb.max.x) / 2;
@@ -378,19 +365,21 @@
       setStatus("3D gerado ✅");
     });
 
+    document.getElementById("btnClear").addEventListener("click", () => {
+      rectData.exists = false;
+      applyRectToSVG();
+      clear3D();
+      setStatus("limpo ✅");
+    });
+
     function animate() {
       requestAnimationFrame(animate);
       renderer.render(scene, camera);
     }
     animate();
 
-    window.addEventListener("resize", () => {
-      const w = container.clientWidth;
-      const h = container.clientHeight;
-      camera.aspect = w / h;
-      camera.updateProjectionMatrix();
-      renderer.setSize(w, h);
-    });
+    // no fim
+    setStatus("pronto ✅ desenha um retângulo e clica 'Ver 3D'");
   </script>
 </body>
 </html>
