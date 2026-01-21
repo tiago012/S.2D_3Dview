@@ -7,12 +7,39 @@
   <style>
     body { font-family: Arial, sans-serif; margin: 0; }
     header { padding: 12px 16px; border-bottom: 1px solid #ddd; display: flex; gap: 12px; align-items: center; }
-    main { display: grid; grid-template-columns: 1fr 1fr; height: calc(100vh - 58px); }
-    .panel { padding: 12px; }
-    #svg2d { width: 100%; height: 100%; border: 1px solid #ddd; background: #fafafa; cursor: crosshair; }
-    #three3d { width: 100%; height: 100%; border: 1px solid #ddd; background: #fff; }
+
+    main { display: grid; grid-template-columns: 1fr 1fr; height: calc(100vh - 58px); gap: 12px; padding: 12px; box-sizing: border-box; }
+
+    .panel {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      min-height: 0; /* importante para flex dentro de grid */
+    }
+
+    #svg2d {
+      flex: 1;
+      width: 100%;
+      border: 1px solid #ddd;
+      background: #fafafa;
+      cursor: crosshair;
+      display: block;
+      min-height: 0;
+    }
+
+    #three3d {
+      flex: 1;
+      width: 100%;
+      border: 1px solid #ddd;
+      background: #fff;
+      min-height: 0;
+      position: relative;
+      overflow: hidden;
+    }
+
     button { padding: 8px 12px; }
     .hint { color: #555; font-size: 14px; }
+    h3 { margin: 0; }
   </style>
 </head>
 
@@ -44,34 +71,39 @@
     // =========================
     // 1) DADOS DO MAPA (2D)
     // =========================
-    // Vamos guardar apenas uma sala por agora.
     const room = {
-      points: [], // cada ponto: {x, y}
+      points: [], // {x, y}
       closed: false
     };
 
-    // Tamanho do "mundo" 2D (metros, por exemplo)
-    // viewBox começa pequeno (-10..10), mas vamos ajustar automaticamente depois
     const svg = document.getElementById("svg2d");
-
-    // Desenhos no SVG
     const ns = "http://www.w3.org/2000/svg";
+
+    // Fundo transparente "clicável" (garante que apanhas cliques em qualquer zona)
+    const bg = document.createElementNS(ns, "rect");
+    bg.setAttribute("x", "-10000");
+    bg.setAttribute("y", "-10000");
+    bg.setAttribute("width", "20000");
+    bg.setAttribute("height", "20000");
+    bg.setAttribute("fill", "transparent");
+    bg.style.pointerEvents = "all";
+    svg.appendChild(bg);
+
+    // Polígono da sala
     const poly = document.createElementNS(ns, "polygon");
     poly.setAttribute("fill", "rgba(0,0,0,0.06)");
     poly.setAttribute("stroke", "#111");
     poly.setAttribute("stroke-width", "0.1");
     svg.appendChild(poly);
 
-    // Grupo para pontos (bolinhas)
+    // Grupo dos pontos
     const pointsGroup = document.createElementNS(ns, "g");
     svg.appendChild(pointsGroup);
 
     function redraw2D() {
-      // Atualiza o polígono
       const pts = room.points.map(p => `${p.x},${p.y}`).join(" ");
       poly.setAttribute("points", pts);
 
-      // Desenha bolinhas
       pointsGroup.innerHTML = "";
       room.points.forEach((p, i) => {
         const c = document.createElementNS(ns, "circle");
@@ -81,11 +113,11 @@
         c.setAttribute("fill", room.closed ? "#111" : "#444");
         pointsGroup.appendChild(c);
 
-        // Pequeno label do índice
         const t = document.createElementNS(ns, "text");
         t.setAttribute("x", p.x + 0.2);
         t.setAttribute("y", p.y - 0.2);
         t.setAttribute("font-size", "0.8");
+        t.setAttribute("fill", "#111");
         t.textContent = i;
         pointsGroup.appendChild(t);
       });
@@ -94,7 +126,6 @@
     }
 
     function fitViewBox() {
-      // Ajusta o viewBox para caber tudo com margem
       if (room.points.length === 0) return;
 
       let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -104,6 +135,7 @@
         maxX = Math.max(maxX, p.x);
         maxY = Math.max(maxY, p.y);
       }
+
       const pad = 2;
       const w = Math.max(6, (maxX - minX) + pad);
       const h = Math.max(6, (maxY - minY) + pad);
@@ -113,24 +145,32 @@
       svg.setAttribute("viewBox", `${cx - w/2} ${cy - h/2} ${w} ${h}`);
     }
 
-    // Converter clique do rato (pixels) -> coordenadas do SVG (mundo)
-    function svgPointFromMouse(evt) {
-      const pt = svg.createSVGPoint();
-      pt.x = evt.clientX;
-      pt.y = evt.clientY;
-      const ctm = svg.getScreenCTM().inverse();
-      const p = pt.matrixTransform(ctm);
-      return { x: roundTo(p.x, 0.25), y: roundTo(p.y, 0.25) }; // snap 0.25
-    }
-
     function roundTo(value, step) {
       return Math.round(value / step) * step;
     }
 
-    svg.addEventListener("click", (evt) => {
-      if (room.closed) return; // se já fechou, não deixa adicionar
+    function svgPointFromMouse(evt) {
+      const pt = svg.createSVGPoint();
+      pt.x = evt.clientX;
+      pt.y = evt.clientY;
+
+      const screenCTM = svg.getScreenCTM();
+      if (!screenCTM) return null;
+
+      const p = pt.matrixTransform(screenCTM.inverse());
+      return { x: roundTo(p.x, 0.25), y: roundTo(p.y, 0.25) };
+    }
+
+    // pointerdown é mais fiável do que click para isto
+    svg.addEventListener("pointerdown", (evt) => {
+      evt.preventDefault();
+      if (room.closed) return;
+
       const p = svgPointFromMouse(evt);
+      if (!p) return;
+
       room.points.push(p);
+      console.log("Ponto adicionado:", p, "Total:", room.points.length);
       redraw2D();
     });
 
@@ -156,7 +196,6 @@
     // 2) THREE.JS (3D)
     // =========================
     const container = document.getElementById("three3d");
-
     const scene = new THREE.Scene();
 
     const camera = new THREE.PerspectiveCamera(
@@ -175,17 +214,14 @@
     controls.target.set(0, 0, 0);
     controls.update();
 
-    // Luz simples
     scene.add(new THREE.AmbientLight(0xffffff, 0.6));
     const dir = new THREE.DirectionalLight(0xffffff, 0.6);
     dir.position.set(10, 20, 10);
     scene.add(dir);
 
-    // Chão (grid)
     const grid = new THREE.GridHelper(50, 50);
     scene.add(grid);
 
-    // Mesh atual
     let currentMesh = null;
 
     function clear3D() {
@@ -198,11 +234,6 @@
     }
 
     function buildExtrudedRoom(points2D, height = 3) {
-      // points2D: [{x,y}, ...]
-      // Three.js usa XZ como "chão" frequentemente.
-      // Vamos mapear:
-      // 2D x -> 3D x
-      // 2D y -> 3D z
       const shape = new THREE.Shape();
       shape.moveTo(points2D[0].x, points2D[0].y);
       for (let i = 1; i < points2D.length; i++) {
@@ -215,14 +246,11 @@
         bevelEnabled: false
       });
 
-      // O extrude faz "altura" no eixo Z do shape.
-      // Vamos rodar para que a altura fique no eixo Y.
       geo.rotateX(Math.PI / 2);
 
       const mat = new THREE.MeshStandardMaterial();
       const mesh = new THREE.Mesh(geo, mat);
 
-      // Centrar um bocado (opcional)
       geo.computeBoundingBox();
       const bb = geo.boundingBox;
       const cx = (bb.min.x + bb.max.x) / 2;
@@ -243,7 +271,6 @@
       currentMesh = buildExtrudedRoom(room.points, 3);
       scene.add(currentMesh);
 
-      // Ajustar câmara para ver bem
       controls.target.set(0, 1.5, 0);
       camera.position.set(12, 10, 12);
       controls.update();
@@ -255,7 +282,6 @@
     }
     animate();
 
-    // Resize responsivo
     window.addEventListener("resize", () => {
       const w = container.clientWidth;
       const h = container.clientHeight;
@@ -263,7 +289,6 @@
       camera.updateProjectionMatrix();
       renderer.setSize(w, h);
     });
-
   </script>
 </body>
 </html>
