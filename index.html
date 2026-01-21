@@ -23,12 +23,13 @@
     #three3d {
       flex: 1; width: 100%;
       border: 1px solid #ddd; background: #fff;
-      min-height: 0; position: relative; overflow: hidden;
+      min-height: 320px; /* garante que nunca fica 0 */
+      position: relative; overflow: hidden;
     }
 
     button { padding: 8px 12px; }
     .hint { color: #555; font-size: 14px; }
-    .status { margin-left: auto; font-size: 12px; color: #333; opacity: 0.8; }
+    .status { margin-left: auto; font-size: 12px; color: #333; opacity: 0.85; }
   </style>
 </head>
 
@@ -52,7 +53,7 @@
     </div>
   </main>
 
-  <!-- Three.js (classic) - CDN mais fiável -->
+  <!-- Three.js (classic) -->
   <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/controls/OrbitControls.js"></script>
 
@@ -61,6 +62,8 @@
     // BOOT / DEBUG
     // =========================
     const statusEl = document.getElementById("status");
+    const btnClear = document.getElementById("btnClear");
+    const btn3d = document.getElementById("btn3d");
     function setStatus(t) { statusEl.textContent = "status: " + t; }
     setStatus("script a correr ✅");
 
@@ -73,10 +76,7 @@
     // snap (opcional). Mete 0.25 para 25cm, mete 0 para desligar.
     const SNAP = 0.25;
 
-    const rectData = {
-      exists: false,
-      x: 0, y: 0, w: 0, h: 0
-    };
+    const rectData = { exists: false, x: 0, y: 0, w: 0, h: 0 };
 
     // Fundo clicável
     const bg = document.createElementNS(ns, "rect");
@@ -145,10 +145,10 @@
       rectEl.setAttribute("height", rectData.h);
 
       const corners = [
-        { x: rectData.x,             y: rectData.y },
-        { x: rectData.x + rectData.w, y: rectData.y },
-        { x: rectData.x + rectData.w, y: rectData.y + rectData.h },
-        { x: rectData.x,             y: rectData.y + rectData.h },
+        { x: rectData.x,               y: rectData.y },
+        { x: rectData.x + rectData.w,  y: rectData.y },
+        { x: rectData.x + rectData.w,  y: rectData.y + rectData.h },
+        { x: rectData.x,               y: rectData.y + rectData.h },
       ];
 
       corners.forEach((p, i) => {
@@ -156,8 +156,6 @@
         handles[i].setAttribute("cx", p.x);
         handles[i].setAttribute("cy", p.y);
       });
-
-      setStatus(`rect: w=${rectData.w.toFixed(2)} h=${rectData.h.toFixed(2)}`);
     }
 
     // Estados de interação
@@ -177,6 +175,7 @@
       rectData.h = 0;
 
       applyRectToSVG();
+      setStatus("a desenhar retângulo…");
     }
 
     function updateDrawing(p) {
@@ -186,6 +185,7 @@
       rectData.w = r.w;
       rectData.h = r.h;
       applyRectToSVG();
+      setStatus(`rect: w=${rectData.w.toFixed(2)} h=${rectData.h.toFixed(2)}`);
     }
 
     function beginResize(handleIndex, p) {
@@ -193,6 +193,7 @@
       activeHandle = handleIndex;
       baseRect = { ...rectData };
       start = p;
+      setStatus("a redimensionar…");
     }
 
     function updateResize(p) {
@@ -213,6 +214,7 @@
       rectData.w = r.w;
       rectData.h = r.h;
       applyRectToSVG();
+      setStatus(`rect: w=${rectData.w.toFixed(2)} h=${rectData.h.toFixed(2)}`);
     }
 
     function endAction() {
@@ -225,6 +227,9 @@
         rectData.exists = false;
       }
       applyRectToSVG();
+
+      if (rectData.exists) setStatus("pronto ✅ retângulo criado");
+      else setStatus("pronto ✅");
     }
 
     bg.addEventListener("pointerdown", (evt) => {
@@ -267,62 +272,95 @@
       try { svg.releasePointerCapture(evt.pointerId); } catch {}
     });
 
-    // =========================
-    // 2) PREVIEW 3D (Three.js) - ROBUSTO
-    // =========================
-    // Diagnóstico para não ficar “silencioso”
-    if (!window.THREE) {
-      setStatus("ERRO: THREE não carregou (verifica os <script src=...>)");
-      throw new Error("THREE não carregou");
+    // ======== LIMPAR (sempre funcional, antes do 3D) ========
+    // clear3D existe mais abaixo; aqui usamos uma função “safe”.
+    function clearAll() {
+      rectData.exists = false;
+      applyRectToSVG();
+      if (typeof clear3D === "function") clear3D();
+      setStatus("limpo ✅");
     }
-    if (!THREE.OrbitControls) {
-      setStatus("ERRO: OrbitControls não carregou (script OrbitControls falhou)");
-      throw new Error("OrbitControls não carregou");
-    }
+    btnClear.addEventListener("click", clearAll);
 
+    applyRectToSVG();
+    setStatus("pronto ✅ desenha um retângulo");
+
+    // =========================
+    // 2) PREVIEW 3D (Three.js) - SEM MATAR O APP
+    // =========================
     const container = document.getElementById("three3d");
-    const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0xf7f7f7);
+    let scene, camera, renderer, controls, currentMesh;
 
-    const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 1000);
-    camera.position.set(12, 10, 12);
+    function init3D() {
+      try {
+        // Diagnóstico sem crash
+        if (!window.THREE) {
+          setStatus("ERRO 3D: THREE não carregou (CDN)");
+          btn3d.disabled = true;
+          return;
+        }
+        if (!THREE.OrbitControls) {
+          setStatus("ERRO 3D: OrbitControls não carregou");
+          btn3d.disabled = true;
+          return;
+        }
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true });
-    container.appendChild(renderer.domElement);
+        scene = new THREE.Scene();
+        scene.background = new THREE.Color(0xf7f7f7);
 
-    const controls = new THREE.OrbitControls(camera, renderer.domElement);
-    controls.target.set(0, 1.5, 0);
-    controls.update();
+        camera = new THREE.PerspectiveCamera(60, 1, 0.1, 1000);
+        camera.position.set(12, 10, 12);
 
-    scene.add(new THREE.AmbientLight(0xffffff, 0.7));
-    const dir = new THREE.DirectionalLight(0xffffff, 0.7);
-    dir.position.set(10, 20, 10);
-    scene.add(dir);
+        renderer = new THREE.WebGLRenderer({ antialias: true });
+        container.appendChild(renderer.domElement);
 
-    scene.add(new THREE.GridHelper(50, 50));
-    scene.add(new THREE.AxesHelper(5));
+        controls = new THREE.OrbitControls(camera, renderer.domElement);
+        controls.target.set(0, 1.5, 0);
+        controls.update();
 
-    let currentMesh = null;
+        scene.add(new THREE.AmbientLight(0xffffff, 0.7));
+        const dir = new THREE.DirectionalLight(0xffffff, 0.7);
+        dir.position.set(10, 20, 10);
+        scene.add(dir);
 
+        scene.add(new THREE.GridHelper(50, 50));
+        scene.add(new THREE.AxesHelper(5));
+
+        currentMesh = null;
+
+        function resizeRenderer() {
+          const w = container.clientWidth || 1;
+          const h = container.clientHeight || 1;
+          renderer.setSize(w, h);
+          camera.aspect = w / h;
+          camera.updateProjectionMatrix();
+        }
+        resizeRenderer();
+        setTimeout(resizeRenderer, 0);
+        window.addEventListener("resize", resizeRenderer);
+
+        function animate() {
+          requestAnimationFrame(animate);
+          renderer.render(scene, camera);
+        }
+        animate();
+
+        setStatus("3D pronto ✅ desenha e clica 'Ver 3D'");
+      } catch (e) {
+        console.error(e);
+        setStatus("ERRO 3D: " + (e?.message || "desconhecido"));
+        btn3d.disabled = true;
+      }
+    }
+
+    // clear3D agora existe (usado pelo botão Limpar)
     function clear3D() {
-      if (!currentMesh) return;
+      if (!scene || !currentMesh) return;
       scene.remove(currentMesh);
       currentMesh.geometry.dispose();
       currentMesh.material.dispose();
       currentMesh = null;
     }
-
-    function resizeRenderer() {
-      const w = container.clientWidth || 1;
-      const h = container.clientHeight || 1;
-      renderer.setSize(w, h);
-      camera.aspect = w / h;
-      camera.updateProjectionMatrix();
-    }
-
-    resizeRenderer();
-    setTimeout(resizeRenderer, 0);
-    window.addEventListener("resize", resizeRenderer);
 
     function buildExtrudedRect3D(r, height = 3) {
       const shape = new THREE.Shape();
@@ -348,7 +386,12 @@
       return mesh;
     }
 
-    document.getElementById("btn3d").addEventListener("click", () => {
+    btn3d.addEventListener("click", () => {
+      if (!scene || !renderer || !camera || !controls) {
+        setStatus("3D ainda não inicializou (ver erro acima)");
+        return;
+      }
+
       if (!rectData.exists || rectData.w <= 0 || rectData.h <= 0) {
         alert("Desenha um retângulo no 2D primeiro.");
         return;
@@ -365,21 +408,8 @@
       setStatus("3D gerado ✅");
     });
 
-    document.getElementById("btnClear").addEventListener("click", () => {
-      rectData.exists = false;
-      applyRectToSVG();
-      clear3D();
-      setStatus("limpo ✅");
-    });
-
-    function animate() {
-      requestAnimationFrame(animate);
-      renderer.render(scene, camera);
-    }
-    animate();
-
-    // no fim
-    setStatus("pronto ✅ desenha um retângulo e clica 'Ver 3D'");
+    // Inicializa 3D no fim (não bloqueia o 2D)
+    init3D();
   </script>
 </body>
 </html>
