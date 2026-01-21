@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Mapa 2D -> Extrusão 3D</title>
+  <title>Retângulo 2D -> Extrusão 3D</title>
   <style>
     body { font-family: Arial, sans-serif; margin: 0; }
     header { padding: 12px 16px; border-bottom: 1px solid #ddd; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
@@ -36,14 +36,13 @@
   <header>
     <button id="btnClear">Limpar</button>
     <button id="btn3d">Ver 3D</button>
-    <span class="hint">Pinta quadrados: clique/arrastar no 2D. (1 quadrado = 1 unidade)</span>
+    <span class="hint">Ferramenta Retângulo: clique + arrastar no 2D. Depois ajusta pelos cantos.</span>
     <span class="status" id="status">status: a iniciar…</span>
   </header>
 
   <main>
     <div class="panel">
-      <h3>2D (Topo) — Grid (SVG)</h3>
-      <!-- viewBox maior para não ficar “gigante” -->
+      <h3>2D (Topo) — SVG</h3>
       <svg id="svg2d" viewBox="-25 -25 50 50" preserveAspectRatio="xMidYMid meet"></svg>
     </div>
 
@@ -66,19 +65,18 @@
     setStatus("script a correr ✅");
 
     // =========================
-    // 1) EDITOR 2D (SVG) - GRID PAINT
+    // 1) EDITOR 2D (SVG) - RECT TOOL
     // =========================
     const svg = document.getElementById("svg2d");
     const ns = "http://www.w3.org/2000/svg";
 
-    // Config
-    const CELL = 1;            // tamanho do quadrado (1 unidade)
-    const GRID_RANGE = 25;     // metade do “mundo” visível (bate com viewBox)
+    // snap (opcional). Mete 0.25 para 25cm, mete 0 para desligar.
+    const SNAP = 0.25;
 
-    // Células preenchidas (guardamos por índices inteiros)
-    const filled = new Set();  // key = "cx,cy"
-
-    function key(cx, cy) { return `${cx},${cy}`; }
+    const rectData = {
+      exists: false,
+      x: 0, y: 0, w: 0, h: 0
+    };
 
     // Fundo clicável
     const bg = document.createElementNS(ns, "rect");
@@ -90,142 +88,211 @@
     bg.style.pointerEvents = "all";
     svg.appendChild(bg);
 
-    // Grupos: grid e preenchimento
-    const gridGroup = document.createElementNS(ns, "g");
-    const fillGroup = document.createElementNS(ns, "g");
-    svg.appendChild(gridGroup);
-    svg.appendChild(fillGroup);
+    // Retângulo desenhado
+    const rectEl = document.createElementNS(ns, "rect");
+    rectEl.setAttribute("fill", "rgba(0,0,0,0.10)");
+    rectEl.setAttribute("stroke", "#111");
+    rectEl.setAttribute("stroke-width", "0.1");
+    rectEl.style.display = "none";
+    svg.appendChild(rectEl);
 
-    function drawGrid(range = GRID_RANGE) {
-      gridGroup.innerHTML = "";
-
-      // linhas verticais
-      for (let x = -range; x <= range; x += CELL) {
-        const line = document.createElementNS(ns, "line");
-        line.setAttribute("x1", x); line.setAttribute("y1", -range);
-        line.setAttribute("x2", x); line.setAttribute("y2", range);
-        line.setAttribute("stroke", "#e2e2e2");
-        line.setAttribute("stroke-width", "0.05");
-        gridGroup.appendChild(line);
-      }
-
-      // linhas horizontais
-      for (let y = -range; y <= range; y += CELL) {
-        const line = document.createElementNS(ns, "line");
-        line.setAttribute("x1", -range); line.setAttribute("y1", y);
-        line.setAttribute("x2", range);  line.setAttribute("y2", y);
-        line.setAttribute("stroke", "#e2e2e2");
-        line.setAttribute("stroke-width", "0.05");
-        gridGroup.appendChild(line);
-      }
-
-      // eixo 0 para referência (um pouco mais forte)
-      const axisX = document.createElementNS(ns, "line");
-      axisX.setAttribute("x1", -range); axisX.setAttribute("y1", 0);
-      axisX.setAttribute("x2", range);  axisX.setAttribute("y2", 0);
-      axisX.setAttribute("stroke", "#c9c9c9");
-      axisX.setAttribute("stroke-width", "0.08");
-      gridGroup.appendChild(axisX);
-
-      const axisY = document.createElementNS(ns, "line");
-      axisY.setAttribute("x1", 0); axisY.setAttribute("y1", -range);
-      axisY.setAttribute("x2", 0); axisY.setAttribute("y2", range);
-      axisY.setAttribute("stroke", "#c9c9c9");
-      axisY.setAttribute("stroke-width", "0.08");
-      gridGroup.appendChild(axisY);
+    // Handles (cantos)
+    const handles = [];
+    for (let i = 0; i < 4; i++) {
+      const c = document.createElementNS(ns, "circle");
+      c.setAttribute("r", "0.35");
+      c.setAttribute("fill", "#111");
+      c.style.display = "none";
+      c.style.cursor = "nwse-resize";
+      svg.appendChild(c);
+      handles.push(c);
     }
 
-    function redrawCells() {
-      fillGroup.innerHTML = "";
-      for (const k of filled) {
-        const [cx, cy] = k.split(",").map(Number);
-
-        // célula (cx,cy) ocupa [cx*CELL .. (cx+1)*CELL]
-        const r = document.createElementNS(ns, "rect");
-        r.setAttribute("x", cx * CELL);
-        r.setAttribute("y", cy * CELL);
-        r.setAttribute("width", CELL);
-        r.setAttribute("height", CELL);
-        r.setAttribute("fill", "rgba(0,0,0,0.10)");
-        r.setAttribute("stroke", "#111");
-        r.setAttribute("stroke-width", "0.05");
-        fillGroup.appendChild(r);
-      }
-      setStatus(`células: ${filled.size}`);
+    function roundSnap(v) {
+      if (!SNAP) return v;
+      return Math.round(v / SNAP) * SNAP;
     }
 
-    function cellFromMouse(evt) {
+    function svgPointFromMouse(evt) {
       const pt = svg.createSVGPoint();
       pt.x = evt.clientX;
       pt.y = evt.clientY;
-
       const ctm = svg.getScreenCTM();
       if (!ctm) return null;
-
       const p = pt.matrixTransform(ctm.inverse());
-
-      // índice de célula (inteiro)
-      const cx = Math.floor(p.x / CELL);
-      const cy = Math.floor(p.y / CELL);
-      return { cx, cy };
+      return { x: roundSnap(p.x), y: roundSnap(p.y) };
     }
 
-    // pintar com clique/arrastar
-    let painting = false;
-    let paintMode = "add"; // "add" ou "remove"
+    function normalizeRect(x0, y0, x1, y1) {
+      const x = Math.min(x0, x1);
+      const y = Math.min(y0, y1);
+      const w = Math.abs(x1 - x0);
+      const h = Math.abs(y1 - y0);
+      return { x, y, w, h };
+    }
 
-    svg.addEventListener("pointerdown", (evt) => {
-      evt.preventDefault();
-      const c = cellFromMouse(evt);
-      if (!c) return;
-
-      const k = key(c.cx, c.cy);
-      painting = true;
-
-      if (filled.has(k)) {
-        paintMode = "remove";
-        filled.delete(k);
-      } else {
-        paintMode = "add";
-        filled.add(k);
+    function applyRectToSVG() {
+      if (!rectData.exists) {
+        rectEl.style.display = "none";
+        handles.forEach(h => h.style.display = "none");
+        return;
       }
-      redrawCells();
+
+      rectEl.style.display = "block";
+      rectEl.setAttribute("x", rectData.x);
+      rectEl.setAttribute("y", rectData.y);
+      rectEl.setAttribute("width", rectData.w);
+      rectEl.setAttribute("height", rectData.h);
+
+      // cantos: (x,y), (x+w,y), (x+w,y+h), (x,y+h)
+      const corners = [
+        { x: rectData.x,           y: rectData.y },
+        { x: rectData.x+rectData.w, y: rectData.y },
+        { x: rectData.x+rectData.w, y: rectData.y+rectData.h },
+        { x: rectData.x,           y: rectData.y+rectData.h },
+      ];
+
+      corners.forEach((p, i) => {
+        handles[i].style.display = "block";
+        handles[i].setAttribute("cx", p.x);
+        handles[i].setAttribute("cy", p.y);
+      });
+
+      setStatus(`rect: w=${rectData.w.toFixed(2)} h=${rectData.h.toFixed(2)}`);
+    }
+
+    // Estados de interação
+    let mode = "idle"; // idle | drawing | resizing
+    let start = null;  // ponto inicial do desenho
+    let activeHandle = -1;
+    let baseRect = null;
+
+    function beginDrawing(p) {
+      mode = "drawing";
+      start = p;
+
+      rectData.exists = true;
+      rectData.x = p.x;
+      rectData.y = p.y;
+      rectData.w = 0;
+      rectData.h = 0;
+
+      applyRectToSVG();
+    }
+
+    function updateDrawing(p) {
+      const r = normalizeRect(start.x, start.y, p.x, p.y);
+      rectData.x = r.x;
+      rectData.y = r.y;
+      rectData.w = r.w;
+      rectData.h = r.h;
+      applyRectToSVG();
+    }
+
+    function beginResize(handleIndex, p) {
+      mode = "resizing";
+      activeHandle = handleIndex;
+      baseRect = { ...rectData };
+      start = p;
+    }
+
+    function updateResize(p) {
+      // cantos da base
+      const x0 = baseRect.x;
+      const y0 = baseRect.y;
+      const x1 = baseRect.x + baseRect.w;
+      const y1 = baseRect.y + baseRect.h;
+
+      // Escolhe qual canto é “fixo” e qual mexe
+      // handle 0: top-left (fixo bottom-right)
+      // handle 1: top-right (fixo bottom-left)
+      // handle 2: bottom-right (fixo top-left)
+      // handle 3: bottom-left (fixo top-right)
+      let fixed, moving;
+
+      if (activeHandle === 0) { fixed = {x:x1,y:y1}; moving = p; }
+      if (activeHandle === 1) { fixed = {x:x0,y:y1}; moving = p; }
+      if (activeHandle === 2) { fixed = {x:x0,y:y0}; moving = p; }
+      if (activeHandle === 3) { fixed = {x:x1,y:y0}; moving = p; }
+
+      const r = normalizeRect(fixed.x, fixed.y, moving.x, moving.y);
+      rectData.x = r.x;
+      rectData.y = r.y;
+      rectData.w = r.w;
+      rectData.h = r.h;
+      applyRectToSVG();
+    }
+
+    function endAction() {
+      mode = "idle";
+      start = null;
+      activeHandle = -1;
+      baseRect = null;
+
+      // se ficou demasiado pequeno, apaga
+      if (rectData.exists && (rectData.w < 0.01 || rectData.h < 0.01)) {
+        rectData.exists = false;
+      }
+      applyRectToSVG();
+    }
+
+    // Clique no fundo = desenhar novo retângulo
+    bg.addEventListener("pointerdown", (evt) => {
+      evt.preventDefault();
+      const p = svgPointFromMouse(evt);
+      if (!p) return;
+
+      // Se clicares fora do retângulo, começa um novo
+      beginDrawing(p);
+      svg.setPointerCapture(evt.pointerId);
+    });
+
+    // Se clicares num handle = resize
+    handles.forEach((h, idx) => {
+      h.addEventListener("pointerdown", (evt) => {
+        evt.preventDefault();
+        evt.stopPropagation();
+        if (!rectData.exists) return;
+
+        const p = svgPointFromMouse(evt);
+        if (!p) return;
+
+        beginResize(idx, p);
+        svg.setPointerCapture(evt.pointerId);
+      });
     });
 
     svg.addEventListener("pointermove", (evt) => {
-      if (!painting) return;
+      if (mode === "idle") return;
       evt.preventDefault();
+      const p = svgPointFromMouse(evt);
+      if (!p) return;
 
-      const c = cellFromMouse(evt);
-      if (!c) return;
-
-      const k = key(c.cx, c.cy);
-      if (paintMode === "add") filled.add(k);
-      else filled.delete(k);
-
-      redrawCells();
+      if (mode === "drawing") updateDrawing(p);
+      if (mode === "resizing") updateResize(p);
     });
 
-    window.addEventListener("pointerup", () => {
-      painting = false;
+    svg.addEventListener("pointerup", (evt) => {
+      if (mode === "idle") return;
+      evt.preventDefault();
+      endAction();
+      try { svg.releasePointerCapture(evt.pointerId); } catch {}
     });
 
     document.getElementById("btnClear").addEventListener("click", () => {
-      filled.clear();
-      redrawCells();
+      rectData.exists = false;
+      applyRectToSVG();
       clear3D();
       setStatus("limpo ✅");
     });
 
-    // inicial
-    drawGrid(GRID_RANGE);
-    redrawCells();
+    applyRectToSVG();
+    setStatus("pronto ✅ desenha um retângulo");
 
     // =========================
     // 2) PREVIEW 3D (Three.js)
     // =========================
     const container = document.getElementById("three3d");
-
     const scene = new THREE.Scene();
 
     const camera = new THREE.PerspectiveCamera(
@@ -249,63 +316,60 @@
     dir.position.set(10, 20, 10);
     scene.add(dir);
 
-    const grid3d = new THREE.GridHelper(50, 50);
-    scene.add(grid3d);
+    const grid = new THREE.GridHelper(50, 50);
+    scene.add(grid);
 
-    let currentGroup = null;
+    let currentMesh = null;
 
     function clear3D() {
-      if (!currentGroup) return;
-      scene.remove(currentGroup);
-      // limpar geometrias/materiais
-      currentGroup.traverse(obj => {
-        if (obj.isMesh) {
-          obj.geometry.dispose();
-          obj.material.dispose();
-        }
-      });
-      currentGroup = null;
+      if (currentMesh) {
+        scene.remove(currentMesh);
+        currentMesh.geometry.dispose();
+        currentMesh.material.dispose();
+        currentMesh = null;
+      }
     }
 
-    function build3DFromCells(height = 3) {
-      // MVP simples: extrudir cada célula como um “bloco”
-      // (mais tarde optimizamos para juntar num só mesh)
-      const group = new THREE.Group();
+    function buildExtrudedRect3D(r, height = 3) {
+      // Retângulo 2D: (x,y,w,h)
+      // Vamos criar um Shape com 4 pontos
+      const shape = new THREE.Shape();
+      shape.moveTo(r.x, r.y);
+      shape.lineTo(r.x + r.w, r.y);
+      shape.lineTo(r.x + r.w, r.y + r.h);
+      shape.lineTo(r.x, r.y + r.h);
+      shape.closePath();
+
+      const geo = new THREE.ExtrudeGeometry(shape, {
+        depth: height,
+        bevelEnabled: false
+      });
+
+      geo.rotateX(Math.PI / 2);
+
       const mat = new THREE.MeshStandardMaterial();
+      const mesh = new THREE.Mesh(geo, mat);
 
-      const boxGeo = new THREE.BoxGeometry(CELL, height, CELL);
+      // Centrar
+      geo.computeBoundingBox();
+      const bb = geo.boundingBox;
+      const cx = (bb.min.x + bb.max.x) / 2;
+      const cy = (bb.min.y + bb.max.y) / 2;
+      const cz = (bb.min.z + bb.max.z) / 2;
+      mesh.position.set(-cx, -cy + (height / 2), -cz);
 
-      for (const k of filled) {
-        const [cx, cy] = k.split(",").map(Number);
-
-        const mesh = new THREE.Mesh(boxGeo, mat);
-        // 2D: x,y -> 3D: x,z ; altura no Y
-        const x = (cx * CELL) + CELL / 2;
-        const z = (cy * CELL) + CELL / 2;
-        mesh.position.set(x, height / 2, z);
-        group.add(mesh);
-      }
-
-      // centrar o grupo na cena (opcional, mas ajuda a “não ficar perdido”)
-      const box = new THREE.Box3().setFromObject(group);
-      if (isFinite(box.min.x)) {
-        const center = box.getCenter(new THREE.Vector3());
-        group.position.x -= center.x;
-        group.position.z -= center.z;
-      }
-
-      return group;
+      return mesh;
     }
 
     document.getElementById("btn3d").addEventListener("click", () => {
-      if (filled.size === 0) {
-        alert("Pinta alguns quadrados no 2D primeiro.");
+      if (!rectData.exists || rectData.w <= 0 || rectData.h <= 0) {
+        alert("Desenha um retângulo no 2D primeiro.");
         return;
       }
 
       clear3D();
-      currentGroup = build3DFromCells(3);
-      scene.add(currentGroup);
+      currentMesh = buildExtrudedRect3D(rectData, 3);
+      scene.add(currentMesh);
 
       controls.target.set(0, 1.5, 0);
       camera.position.set(12, 10, 12);
@@ -327,10 +391,6 @@
       camera.updateProjectionMatrix();
       renderer.setSize(w, h);
     });
-
-    setStatus("pronto ✅ pinta quadrados no SVG");
   </script>
 </body>
 </html>
-
-
