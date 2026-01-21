@@ -6,40 +6,28 @@
   <title>Mapa 2D -> Extrusão 3D</title>
   <style>
     body { font-family: Arial, sans-serif; margin: 0; }
-    header { padding: 12px 16px; border-bottom: 1px solid #ddd; display: flex; gap: 12px; align-items: center; }
+    header { padding: 12px 16px; border-bottom: 1px solid #ddd; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+    main { display: grid; grid-template-columns: 1fr 1fr; height: calc(100vh - 60px); gap: 12px; padding: 12px; box-sizing: border-box; }
 
-    main { display: grid; grid-template-columns: 1fr 1fr; height: calc(100vh - 58px); gap: 12px; padding: 12px; box-sizing: border-box; }
-
-    .panel {
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-      min-height: 0; /* importante para flex dentro de grid */
-    }
+    .panel { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+    h3 { margin: 0; }
 
     #svg2d {
-      flex: 1;
-      width: 100%;
-      border: 1px solid #ddd;
-      background: #fafafa;
-      cursor: crosshair;
-      display: block;
-      min-height: 0;
+      flex: 1; width: 100%;
+      border: 1px solid #ddd; background: #fafafa;
+      cursor: crosshair; display: block; min-height: 0;
+      touch-action: none; /* para pointer events */
     }
 
     #three3d {
-      flex: 1;
-      width: 100%;
-      border: 1px solid #ddd;
-      background: #fff;
-      min-height: 0;
-      position: relative;
-      overflow: hidden;
+      flex: 1; width: 100%;
+      border: 1px solid #ddd; background: #fff;
+      min-height: 0; position: relative; overflow: hidden;
     }
 
     button { padding: 8px 12px; }
     .hint { color: #555; font-size: 14px; }
-    h3 { margin: 0; }
+    .status { margin-left: auto; font-size: 12px; color: #333; opacity: 0.8; }
   </style>
 </head>
 
@@ -48,7 +36,8 @@
     <button id="btnClose">Fechar sala</button>
     <button id="btnClear">Limpar</button>
     <button id="btn3d">Ver 3D</button>
-    <span class="hint">Clica no painel 2D para criar pontos. Precisas de pelo menos 3.</span>
+    <span class="hint">Clica no painel 2D para criar pontos (snap 0.25). Precisas de 3+.</span>
+    <span class="status" id="status">status: a iniciar…</span>
   </header>
 
   <main>
@@ -63,23 +52,29 @@
     </div>
   </main>
 
-  <!-- Three.js via CDN (ESM) -->
-  <script type="module">
-    import * as THREE from "https://unpkg.com/three@0.160.0/build/three.module.js";
-    import { OrbitControls } from "https://unpkg.com/three@0.160.0/examples/jsm/controls/OrbitControls.js";
+  <!-- Three.js (classic) -->
+  <script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
+  <script src="https://unpkg.com/three@0.160.0/examples/js/controls/OrbitControls.js"></script>
+
+  <script>
+    // =========================
+    // BOOT / DEBUG
+    // =========================
+    const statusEl = document.getElementById("status");
+    function setStatus(t) { statusEl.textContent = "status: " + t; }
+
+    // Se isto não mudar para "pronto", o script nem está a correr.
+    setStatus("script a correr ✅");
 
     // =========================
-    // 1) DADOS DO MAPA (2D)
+    // 1) EDITOR 2D (SVG)
     // =========================
-    const room = {
-      points: [], // {x, y}
-      closed: false
-    };
+    const room = { points: [], closed: false };
 
     const svg = document.getElementById("svg2d");
     const ns = "http://www.w3.org/2000/svg";
 
-    // Fundo transparente "clicável" (garante que apanhas cliques em qualquer zona)
+    // Fundo clicável
     const bg = document.createElementNS(ns, "rect");
     bg.setAttribute("x", "-10000");
     bg.setAttribute("y", "-10000");
@@ -89,20 +84,49 @@
     bg.style.pointerEvents = "all";
     svg.appendChild(bg);
 
-    // Polígono da sala
     const poly = document.createElementNS(ns, "polygon");
     poly.setAttribute("fill", "rgba(0,0,0,0.06)");
     poly.setAttribute("stroke", "#111");
     poly.setAttribute("stroke-width", "0.1");
     svg.appendChild(poly);
 
-    // Grupo dos pontos
     const pointsGroup = document.createElementNS(ns, "g");
     svg.appendChild(pointsGroup);
 
+    function roundTo(value, step) {
+      return Math.round(value / step) * step;
+    }
+
+    function svgPointFromMouse(evt) {
+      const pt = svg.createSVGPoint();
+      pt.x = evt.clientX;
+      pt.y = evt.clientY;
+      const ctm = svg.getScreenCTM();
+      if (!ctm) return null;
+      const p = pt.matrixTransform(ctm.inverse());
+      return { x: roundTo(p.x, 0.25), y: roundTo(p.y, 0.25) };
+    }
+
+    function fitViewBox() {
+      if (room.points.length === 0) return;
+
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const p of room.points) {
+        minX = Math.min(minX, p.x);
+        minY = Math.min(minY, p.y);
+        maxX = Math.max(maxX, p.x);
+        maxY = Math.max(maxY, p.y);
+      }
+      const pad = 2;
+      const w = Math.max(6, (maxX - minX) + pad);
+      const h = Math.max(6, (maxY - minY) + pad);
+      const cx = (minX + maxX) / 2;
+      const cy = (minY + maxY) / 2;
+      svg.setAttribute("viewBox", `${cx - w/2} ${cy - h/2} ${w} ${h}`);
+    }
+
     function redraw2D() {
-      const pts = room.points.map(p => `${p.x},${p.y}`).join(" ");
-      poly.setAttribute("points", pts);
+      poly.setAttribute("points", room.points.map(p => `${p.x},${p.y}`).join(" "));
 
       pointsGroup.innerHTML = "";
       room.points.forEach((p, i) => {
@@ -125,52 +149,17 @@
       fitViewBox();
     }
 
-    function fitViewBox() {
-      if (room.points.length === 0) return;
-
-      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-      for (const p of room.points) {
-        minX = Math.min(minX, p.x);
-        minY = Math.min(minY, p.y);
-        maxX = Math.max(maxX, p.x);
-        maxY = Math.max(maxY, p.y);
-      }
-
-      const pad = 2;
-      const w = Math.max(6, (maxX - minX) + pad);
-      const h = Math.max(6, (maxY - minY) + pad);
-      const cx = (minX + maxX) / 2;
-      const cy = (minY + maxY) / 2;
-
-      svg.setAttribute("viewBox", `${cx - w/2} ${cy - h/2} ${w} ${h}`);
-    }
-
-    function roundTo(value, step) {
-      return Math.round(value / step) * step;
-    }
-
-    function svgPointFromMouse(evt) {
-      const pt = svg.createSVGPoint();
-      pt.x = evt.clientX;
-      pt.y = evt.clientY;
-
-      const screenCTM = svg.getScreenCTM();
-      if (!screenCTM) return null;
-
-      const p = pt.matrixTransform(screenCTM.inverse());
-      return { x: roundTo(p.x, 0.25), y: roundTo(p.y, 0.25) };
-    }
-
-    // pointerdown é mais fiável do que click para isto
+    // Listener: pointerdown (melhor do que click)
     svg.addEventListener("pointerdown", (evt) => {
       evt.preventDefault();
+
       if (room.closed) return;
 
       const p = svgPointFromMouse(evt);
       if (!p) return;
 
       room.points.push(p);
-      console.log("Ponto adicionado:", p, "Total:", room.points.length);
+      setStatus(`ponto ${room.points.length} adicionado ✅`);
       redraw2D();
     });
 
@@ -180,6 +169,7 @@
         return;
       }
       room.closed = true;
+      setStatus("sala fechada ✅");
       redraw2D();
     });
 
@@ -190,12 +180,14 @@
       pointsGroup.innerHTML = "";
       svg.setAttribute("viewBox", "-10 -10 20 20");
       clear3D();
+      setStatus("limpo ✅");
     });
 
     // =========================
-    // 2) THREE.JS (3D)
+    // 2) PREVIEW 3D (Three.js)
     // =========================
     const container = document.getElementById("three3d");
+
     const scene = new THREE.Scene();
 
     const camera = new THREE.PerspectiveCamera(
@@ -210,7 +202,7 @@
     renderer.setSize(container.clientWidth, container.clientHeight);
     container.appendChild(renderer.domElement);
 
-    const controls = new OrbitControls(camera, renderer.domElement);
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
     controls.target.set(0, 0, 0);
     controls.update();
 
@@ -246,6 +238,7 @@
         bevelEnabled: false
       });
 
+      // passar "altura" para eixo Y
       geo.rotateX(Math.PI / 2);
 
       const mat = new THREE.MeshStandardMaterial();
@@ -266,14 +259,16 @@
         alert("Fecha a sala primeiro (mínimo 3 pontos).");
         return;
       }
-      clear3D();
 
+      clear3D();
       currentMesh = buildExtrudedRoom(room.points, 3);
       scene.add(currentMesh);
 
       controls.target.set(0, 1.5, 0);
       camera.position.set(12, 10, 12);
       controls.update();
+
+      setStatus("3D gerado ✅");
     });
 
     function animate() {
@@ -289,6 +284,8 @@
       camera.updateProjectionMatrix();
       renderer.setSize(w, h);
     });
+
+    setStatus("pronto ✅ clica no SVG");
   </script>
 </body>
 </html>
