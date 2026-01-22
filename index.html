@@ -33,11 +33,20 @@
     .status { margin-left: auto; font-size: 12px; color: #333; opacity: 0.85; display: flex; flex-direction: column; gap: 2px; }
     .status-line { white-space: nowrap; }
 
-    /* ALTURA UI */
     .ctrl { display: flex; align-items: center; gap: 8px; }
     .ctrl label { font-size: 14px; color: #333; }
     .ctrl input[type="range"] { width: 160px; }
     .ctrl .val { font-size: 12px; opacity: 0.8; min-width: 70px; text-align: right; }
+
+    /* pequeno overlay no 3D para dica de drop */
+    #dropHint {
+      position:absolute; inset:0;
+      display:none;
+      align-items:center; justify-content:center;
+      font-size:14px;
+      background:rgba(0,0,0,0.04);
+      pointer-events:none;
+    }
   </style>
 </head>
 
@@ -46,14 +55,13 @@
     <button id="btnClear">Limpar</button>
     <button id="btn3d">Ver 3D</button>
 
-    <!-- ALTURA: slider -->
     <div class="ctrl" title="Altura da extrusão em 'metros/unidades'">
       <label for="heightRange">Altura</label>
       <input id="heightRange" type="range" min="0.5" max="6" step="0.25" value="0.50" />
       <span class="val" id="heightVal">0.50</span>
     </div>
 
-    <span class="hint">Desenha retângulos (tipo Photoshop). Se encostarem, unem num só.</span>
+    <span class="hint">Desenha retângulos. 3D: arrasta um .glb/.gltf para colocar objetos.</span>
 
     <span class="status" id="status">
       <span class="status-line" id="status2d">2D: a iniciar…</span>
@@ -69,11 +77,16 @@
 
     <div class="panel">
       <h3>3D — Extrusão (forma unida)</h3>
-      <div id="three3d"></div>
+      <div id="three3d">
+        <div id="dropHint">Larga aqui um .glb / .gltf</div>
+      </div>
     </div>
   </main>
 
+  <!-- Three.js -->
   <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+  <!-- GLTFLoader (para .glb/.gltf) -->
+  <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/loaders/GLTFLoader.js"></script>
 
   <script>
     // =========================
@@ -96,9 +109,9 @@
     const heightRange = document.getElementById("heightRange");
     const heightVal = document.getElementById("heightVal");
 
-    let EXTRUDE_HEIGHT = parseFloat(heightRange.value) || 2.0; // default mais baixo
+    let EXTRUDE_HEIGHT = parseFloat(heightRange.value) || 0.5;
     function updateHeightUI() {
-      EXTRUDE_HEIGHT = parseFloat(heightRange.value) || 2.0;
+      EXTRUDE_HEIGHT = parseFloat(heightRange.value) || 0.5;
       heightVal.textContent = EXTRUDE_HEIGHT.toFixed(2);
       setStatus3D(`altura = ${EXTRUDE_HEIGHT.toFixed(2)} (clica 'Ver 3D')`);
     }
@@ -111,7 +124,6 @@
     const svg = document.getElementById("svg2d");
     const ns = "http://www.w3.org/2000/svg";
 
-    // Tamanho do “quadrado D&D”
     const CELL = 1;
     const SNAP = CELL;
 
@@ -143,10 +155,7 @@
     unionPath.setAttribute("fill-rule", "evenodd");
     svg.appendChild(unionPath);
 
-    function roundSnap(v) {
-      if (!SNAP) return v;
-      return Math.round(v / SNAP) * SNAP;
-    }
+    function roundSnap(v) { return SNAP ? Math.round(v / SNAP) * SNAP : v; }
 
     function svgPointFromMouse(evt) {
       const pt = svg.createSVGPoint();
@@ -174,9 +183,7 @@
       const x1 = Math.ceil((r.x + r.w) / CELL) - 1;
       const y1 = Math.ceil((r.y + r.h) / CELL) - 1;
 
-      for (let i = x0; i <= x1; i++) {
-        for (let j = y0; j <= y1; j++) add(i,j);
-      }
+      for (let i = x0; i <= x1; i++) for (let j = y0; j <= y1; j++) add(i,j);
     }
 
     function buildBoundaryEdges() {
@@ -213,19 +220,17 @@
       function edgeKey(aKey,bKey){ return aKey+"->"+bKey; }
 
       const loops = [];
-
       for (const [aKey, outs] of nextMap.entries()) {
         for (const out of outs) {
           const ek = edgeKey(aKey, out.kb);
           if (used.has(ek)) continue;
 
           const loop = [];
-          let curAKey = aKey;
           let curB = out.b;
           let curBKey = out.kb;
 
           {
-            const [ax,ay] = curAKey.split(",").map(Number);
+            const [ax,ay] = aKey.split(",").map(Number);
             loop.push([ax,ay]);
           }
 
@@ -234,7 +239,6 @@
           let guard = 0;
           while (guard++ < 200000) {
             loop.push([curB[0], curB[1]]);
-
             if (curBKey === aKey) break;
 
             const outs2 = nextMap.get(curBKey);
@@ -247,11 +251,11 @@
             }
             if (!chosen) break;
 
-            curAKey = curBKey;
             curB = chosen.b;
             curBKey = chosen.kb;
           }
 
+          // remover último ponto duplicado
           if (loop.length >= 2) {
             const first = loop[0], last = loop[loop.length-1];
             if (Math.abs(first[0]-last[0])<1e-6 && Math.abs(first[1]-last[1])<1e-6) loop.pop();
@@ -357,31 +361,21 @@
       try { svg.releasePointerCapture(evt.pointerId); } catch {}
     });
 
-    function clearAll() {
-      filled.clear();
-      unionPath.setAttribute("d", "");
-      hidePreview();
-      clear3D();
-      setStatus2D("limpo ✅");
-      setStatus3D("limpo ✅");
-    }
-    btnClear.addEventListener("click", clearAll);
-
-    setStatus2D("pronto ✅ desenha retângulos");
-
     // =========================
-    // 2) PREVIEW 3D (Three.js)
+    // 2) PREVIEW 3D (Three.js) + DRAG&DROP GLB
     // =========================
     const container = document.getElementById("three3d");
+    const dropHint = document.getElementById("dropHint");
     let scene, camera, renderer, currentMesh;
 
-    const camState = {
-      target: null,
-      radius: 18,
-      theta: Math.PI / 4,
-      phi: Math.PI / 3
-    };
+    // objetos colocados
+    const placedObjects = [];
+    const placedGroup = new THREE.Group(); // onde ficam os modelos fixos
+    let ghostModel = null;   // segue o rato
+    let pendingModel = null; // pronto a colocar
 
+    // câmara orbit simples
+    const camState = { target: null, radius: 18, theta: Math.PI/4, phi: Math.PI/3 };
     function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
 
     function updateCamera() {
@@ -395,11 +389,8 @@
 
     function init3D() {
       try {
-        if (!window.THREE) {
-          setStatus3D("ERRO: THREE não carregou (CDN)");
-          btn3d.disabled = true;
-          return;
-        }
+        if (!window.THREE) { setStatus3D("ERRO: THREE não carregou"); btn3d.disabled = true; return; }
+        if (!THREE.GLTFLoader) { setStatus3D("ERRO: GLTFLoader não carregou"); return; }
 
         scene = new THREE.Scene();
         scene.background = new THREE.Color(0xf7f7f7);
@@ -419,7 +410,7 @@
         scene.add(new THREE.GridHelper(100, 100));
         scene.add(new THREE.AxesHelper(5));
 
-        currentMesh = null;
+        scene.add(placedGroup);
 
         function resizeRenderer() {
           const w = container.clientWidth || 1;
@@ -432,22 +423,23 @@
         setTimeout(resizeRenderer, 0);
         window.addEventListener("resize", resizeRenderer);
 
+        // controlos do rato (câmara) — DESLIGA quando houver pendingModel (para colocar)
         let dragging = false;
         let lastX = 0, lastY = 0;
 
         renderer.domElement.addEventListener("pointerdown", (e) => {
+          if (pendingModel) return; // se estamos a colocar modelo, não mexe a câmara
           dragging = true;
-          lastX = e.clientX;
-          lastY = e.clientY;
+          lastX = e.clientX; lastY = e.clientY;
           renderer.domElement.setPointerCapture(e.pointerId);
         });
 
         renderer.domElement.addEventListener("pointermove", (e) => {
+          if (pendingModel) return;
           if (!dragging) return;
           const dx = e.clientX - lastX;
           const dy = e.clientY - lastY;
-          lastX = e.clientX;
-          lastY = e.clientY;
+          lastX = e.clientX; lastY = e.clientY;
 
           camState.theta -= dx * 0.01;
           camState.phi = clamp(camState.phi + dy * 0.01, 0.15, Math.PI - 0.15);
@@ -457,11 +449,109 @@
         window.addEventListener("pointerup", () => dragging = false);
 
         renderer.domElement.addEventListener("wheel", (e) => {
+          if (pendingModel) return;
           e.preventDefault();
           const delta = Math.sign(e.deltaY);
           camState.radius = clamp(camState.radius + delta * 1.2, 2, 200);
           updateCamera();
         }, { passive: false });
+
+        // ===== Drag & Drop =====
+        const loader = new THREE.GLTFLoader();
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2();
+        const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0); // y=0
+
+        function getGroundPointFromEvent(evt) {
+          const rect = renderer.domElement.getBoundingClientRect();
+          mouse.x = ((evt.clientX - rect.left) / rect.width) * 2 - 1;
+          mouse.y = -(((evt.clientY - rect.top) / rect.height) * 2 - 1);
+          raycaster.setFromCamera(mouse, camera);
+          const p = new THREE.Vector3();
+          return raycaster.ray.intersectPlane(groundPlane, p) ? p : null;
+        }
+
+        // mostrar hint
+        container.addEventListener("dragenter", (e) => { e.preventDefault(); dropHint.style.display = "flex"; });
+        container.addEventListener("dragleave", (e) => { e.preventDefault(); dropHint.style.display = "none"; });
+        container.addEventListener("dragover", (e) => { e.preventDefault(); });
+
+        container.addEventListener("drop", (e) => {
+          e.preventDefault();
+          dropHint.style.display = "none";
+
+          const file = e.dataTransfer.files?.[0];
+          if (!file) return;
+
+          const name = file.name.toLowerCase();
+          if (!name.endsWith(".glb") && !name.endsWith(".gltf")) {
+            setStatus3D("formato inválido (usa .glb/.gltf)");
+            return;
+          }
+
+          setStatus3D("a carregar modelo…");
+          const url = URL.createObjectURL(file);
+
+          loader.load(url, (gltf) => {
+            URL.revokeObjectURL(url);
+
+            // remove ghost anterior
+            if (ghostModel) scene.remove(ghostModel);
+
+            ghostModel = gltf.scene;
+            ghostModel.name = file.name;
+
+            // escala default (ajusta se o teu modelo vier gigante)
+            ghostModel.scale.set(1,1,1);
+
+            scene.add(ghostModel);
+            pendingModel = ghostModel;
+
+            setStatus3D("modelo carregado ✅ move o rato e clica para colocar");
+          }, undefined, (err) => {
+            console.error(err);
+            setStatus3D("erro a carregar modelo");
+          });
+        });
+
+        // mover ghost no chão
+        renderer.domElement.addEventListener("pointermove", (evt) => {
+          if (!pendingModel) return;
+          const p = getGroundPointFromEvent(evt);
+          if (!p) return;
+
+          // snap ao grid (CELL)
+          p.x = Math.round(p.x / CELL) * CELL;
+          p.z = Math.round(p.z / CELL) * CELL;
+          p.y = 0;
+
+          pendingModel.position.copy(p);
+        });
+
+        // clicar para “fixar” o objeto
+        renderer.domElement.addEventListener("pointerdown", (evt) => {
+          if (!pendingModel) return;
+
+          const p = getGroundPointFromEvent(evt);
+          if (!p) return;
+
+          p.x = Math.round(p.x / CELL) * CELL;
+          p.z = Math.round(p.z / CELL) * CELL;
+          p.y = 0;
+
+          // fixa uma cópia (para poderes colocar várias)
+          const fixed = pendingModel.clone(true);
+          fixed.position.copy(p);
+          placedGroup.add(fixed);
+
+          placedObjects.push({
+            name: pendingModel.name || "dropped-model",
+            position: { x: p.x, y: p.y, z: p.z },
+            scale: { x: pendingModel.scale.x, y: pendingModel.scale.y, z: pendingModel.scale.z }
+          });
+
+          setStatus3D(`objeto colocado ✅ total=${placedObjects.length}`);
+        });
 
         function animate() {
           requestAnimationFrame(animate);
@@ -469,7 +559,7 @@
         }
         animate();
 
-        setStatus3D("pronto ✅ — clica 'Ver 3D'");
+        setStatus3D("pronto ✅ — clica 'Ver 3D' ou arrasta um .glb");
       } catch (e) {
         console.error(e);
         setStatus3D("ERRO: " + (e?.message || "desconhecido"));
@@ -478,11 +568,24 @@
     }
 
     function clear3D() {
-      if (!scene || !currentMesh) return;
-      scene.remove(currentMesh);
-      currentMesh.geometry.dispose();
-      currentMesh.material.dispose();
-      currentMesh = null;
+      if (!scene) return;
+
+      // limpa mesh da extrusão
+      if (currentMesh) {
+        scene.remove(currentMesh);
+        currentMesh.geometry.dispose();
+        currentMesh.material.dispose();
+        currentMesh = null;
+      }
+
+      // limpa objetos colocados
+      placedGroup.clear();
+      placedObjects.length = 0;
+
+      // limpa ghost
+      if (ghostModel) scene.remove(ghostModel);
+      ghostModel = null;
+      pendingModel = null;
     }
 
     function loopsFor3D() {
@@ -543,10 +646,16 @@
         return;
       }
 
-      clear3D();
+      // remove só a extrusão (não mexe nos modelos colocados)
+      if (currentMesh) {
+        scene.remove(currentMesh);
+        currentMesh.geometry.dispose();
+        currentMesh.material.dispose();
+        currentMesh = null;
+      }
 
       const loops = loopsFor3D();
-      currentMesh = buildExtrudedFromLoops(loops, EXTRUDE_HEIGHT); // <--- ALTURA AQUI
+      currentMesh = buildExtrudedFromLoops(loops, EXTRUDE_HEIGHT);
       if (!currentMesh) {
         setStatus3D("não foi possível gerar forma");
         return;
@@ -563,9 +672,22 @@
       setStatus3D(`gerado ✅ altura=${EXTRUDE_HEIGHT.toFixed(2)}`);
     });
 
+    // Limpar (2D + 3D)
+    function clearAll() {
+      filled.clear();
+      unionPath.setAttribute("d", "");
+      hidePreview();
+      clear3D();
+      setStatus2D("limpo ✅");
+      setStatus3D("limpo ✅");
+    }
+    btnClear.addEventListener("click", clearAll);
+
     init3D();
   </script>
 </body>
 </html>
+
+
 
 
