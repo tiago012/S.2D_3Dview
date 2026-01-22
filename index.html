@@ -85,9 +85,6 @@
   <!-- Three.js -->
   <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
 
-  <!-- GLTFLoader: trocar para unpkg + criar como global (window.GLTFLoader) -->
-  <script src="https://unpkg.com/three@0.160.0/examples/js/loaders/GLTFLoader.js"></script>
-
   <script>
     // =========================
     // STATUS
@@ -229,11 +226,7 @@
           let curB = out.b;
           let curBKey = out.kb;
 
-          {
-            const [ax,ay] = aKey.split(",").map(Number);
-            loop.push([ax,ay]);
-          }
-
+          { const [ax,ay] = aKey.split(",").map(Number); loop.push([ax,ay]); }
           used.add(ek);
 
           let guard = 0;
@@ -288,10 +281,7 @@
     }
 
     function redrawUnion() {
-      if (filled.size === 0) {
-        unionPath.setAttribute("d", "");
-        return;
-      }
+      if (filled.size === 0) { unionPath.setAttribute("d", ""); return; }
       const edges = buildBoundaryEdges();
       const loops = edgesToLoops(edges);
       unionPath.setAttribute("d", loopsToSvgPath(loops));
@@ -348,20 +338,17 @@
           commitRectToGrid(r);
           redrawUnion();
           setStatus2D("retângulo aplicado ✅ (unido automaticamente)");
-        } else {
-          setStatus2D("demasiado pequeno (ignorado)");
-        }
+        } else setStatus2D("demasiado pequeno (ignorado)");
       }
 
       hidePreview();
       mode = "idle";
       start = null;
-
       try { svg.releasePointerCapture(evt.pointerId); } catch {}
     });
 
     // =========================
-    // 2) PREVIEW 3D (Three.js) + DRAG&DROP GLB
+    // 2) PREVIEW 3D + DRAG&DROP
     // =========================
     const container = document.getElementById("three3d");
     const dropHint = document.getElementById("dropHint");
@@ -374,7 +361,6 @@
 
     const camState = { target: null, radius: 18, theta: Math.PI/4, phi: Math.PI/3 };
     function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
-
     function updateCamera() {
       const sinPhi = Math.sin(camState.phi);
       const x = camState.target.x + camState.radius * sinPhi * Math.cos(camState.theta);
@@ -384,17 +370,43 @@
       camera.lookAt(camState.target);
     }
 
-    function init3D() {
+    // ✅ Loader: tenta CDNs, depois local ./libs/GLTFLoader.js
+    async function ensureGLTFLoader() {
+      const already = window.GLTFLoader || (THREE && THREE.GLTFLoader);
+      if (already) return true;
+
+      const candidates = [
+        "https://unpkg.com/three@0.160.0/examples/js/loaders/GLTFLoader.js",
+        "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/loaders/GLTFLoader.js",
+        "./libs/GLTFLoader.js" // ✅ o mais importante: local no teu repo
+      ];
+
+      function loadScript(src) {
+        return new Promise((resolve, reject) => {
+          const s = document.createElement("script");
+          s.src = src;
+          s.async = true;
+          s.onload = () => resolve(true);
+          s.onerror = () => reject(new Error("Falhou: " + src));
+          document.head.appendChild(s);
+        });
+      }
+
+      for (const src of candidates) {
+        try {
+          await loadScript(src);
+          const ok = window.GLTFLoader || (THREE && THREE.GLTFLoader);
+          if (ok) return true;
+        } catch (e) {
+          // tenta o próximo
+        }
+      }
+      return false;
+    }
+
+    async function init3D() {
       try {
         if (!window.THREE) { setStatus3D("ERRO: THREE não carregou"); btn3d.disabled = true; return; }
-
-        // ✅ FIX: GLTFLoader pode estar em window.GLTFLoader (global) ou THREE.GLTFLoader
-        const GLTFLoaderCtor = (window.GLTFLoader) || (THREE && THREE.GLTFLoader);
-        if (!GLTFLoaderCtor) {
-          setStatus3D("ERRO: GLTFLoader não carregou (CDN bloqueado ou path errado)");
-          // não desativa o 3D; só desativa o drag-drop de modelos
-          // a extrusão continua a funcionar.
-        }
 
         scene = new THREE.Scene();
         scene.background = new THREE.Color(0xf7f7f7);
@@ -426,7 +438,7 @@
         setTimeout(resizeRenderer, 0);
         window.addEventListener("resize", resizeRenderer);
 
-        // controlos do rato (câmara) — desliga quando houver pendingModel
+        // controlos câmara
         let dragging = false;
         let lastX = 0, lastY = 0;
 
@@ -459,10 +471,7 @@
           updateCamera();
         }, { passive: false });
 
-        // ===== Drag & Drop =====
-        // ✅ FIX: cria loader com o construtor certo
-        const loader = GLTFLoaderCtor ? new GLTFLoaderCtor() : null;
-
+        // Raycast chão
         const raycaster = new THREE.Raycaster();
         const mouse = new THREE.Vector2();
         const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
@@ -476,6 +485,18 @@
           return raycaster.ray.intersectPlane(groundPlane, p) ? p : null;
         }
 
+        // ✅ tenta ativar GLTFLoader
+        const loaderOK = await ensureGLTFLoader();
+        const GLTFLoaderCtor = window.GLTFLoader || (THREE && THREE.GLTFLoader);
+        const loader = (loaderOK && GLTFLoaderCtor) ? new GLTFLoaderCtor() : null;
+
+        if (!loader) {
+          setStatus3D("pronto ✅ — extrusão ok (drag-drop bloqueado: mete ./libs/GLTFLoader.js no repo)");
+        } else {
+          setStatus3D("pronto ✅ — clica 'Ver 3D' ou arrasta um .glb");
+        }
+
+        // Drag & Drop (só se loader existir)
         container.addEventListener("dragenter", (e) => { e.preventDefault(); dropHint.style.display = "flex"; });
         container.addEventListener("dragleave", (e) => { e.preventDefault(); dropHint.style.display = "none"; });
         container.addEventListener("dragover", (e) => { e.preventDefault(); });
@@ -485,7 +506,7 @@
           dropHint.style.display = "none";
 
           if (!loader) {
-            setStatus3D("GLTFLoader indisponível (CDN bloqueado). Extrusão funciona, mas drag-drop não.");
+            setStatus3D("drag-drop indisponível: coloca ./libs/GLTFLoader.js no repo (CDN bloqueado)");
             return;
           }
 
@@ -534,7 +555,6 @@
 
         renderer.domElement.addEventListener("pointerdown", (evt) => {
           if (!pendingModel) return;
-
           const p = getGroundPointFromEvent(evt);
           if (!p) return;
 
@@ -548,8 +568,7 @@
 
           placedObjects.push({
             name: pendingModel.name || "dropped-model",
-            position: { x: p.x, y: p.y, z: p.z },
-            scale: { x: pendingModel.scale.x, y: pendingModel.scale.y, z: pendingModel.scale.z }
+            position: { x: p.x, y: p.y, z: p.z }
           });
 
           setStatus3D(`objeto colocado ✅ total=${placedObjects.length}`);
@@ -561,8 +580,6 @@
         }
         animate();
 
-        // se loader falhar, ainda assim deixamos o 3D “pronto” para extrusão
-        setStatus3D(loader ? "pronto ✅ — clica 'Ver 3D' ou arrasta um .glb" : "pronto ✅ — extrusão ok (drag-drop indisponível)");
       } catch (e) {
         console.error(e);
         setStatus3D("ERRO: " + (e?.message || "desconhecido"));
@@ -637,14 +654,8 @@
     }
 
     btn3d.addEventListener("click", () => {
-      if (!scene || !renderer || !camera) {
-        setStatus3D("ainda não inicializou");
-        return;
-      }
-      if (filled.size === 0) {
-        alert("Desenha pelo menos uma área no 2D primeiro.");
-        return;
-      }
+      if (!scene || !renderer || !camera) { setStatus3D("ainda não inicializou"); return; }
+      if (filled.size === 0) { alert("Desenha pelo menos uma área no 2D primeiro."); return; }
 
       if (currentMesh) {
         scene.remove(currentMesh);
@@ -655,10 +666,7 @@
 
       const loops = loopsFor3D();
       currentMesh = buildExtrudedFromLoops(loops, EXTRUDE_HEIGHT);
-      if (!currentMesh) {
-        setStatus3D("não foi possível gerar forma");
-        return;
-      }
+      if (!currentMesh) { setStatus3D("não foi possível gerar forma"); return; }
 
       scene.add(currentMesh);
 
@@ -681,10 +689,8 @@
     }
     btnClear.addEventListener("click", clearAll);
 
+    setStatus2D("pronto ✅ desenha retângulos");
     init3D();
   </script>
 </body>
 </html>
-
-
-
