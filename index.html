@@ -38,7 +38,6 @@
     .ctrl input[type="range"] { width: 160px; }
     .ctrl .val { font-size: 12px; opacity: 0.8; min-width: 70px; text-align: right; }
 
-    /* pequeno overlay no 3D para dica de drop */
     #dropHint {
       position:absolute; inset:0;
       display:none;
@@ -85,8 +84,9 @@
 
   <!-- Three.js -->
   <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
-  <!-- GLTFLoader (para .glb/.gltf) -->
-  <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/examples/js/loaders/GLTFLoader.js"></script>
+
+  <!-- GLTFLoader: trocar para unpkg + criar como global (window.GLTFLoader) -->
+  <script src="https://unpkg.com/three@0.160.0/examples/js/loaders/GLTFLoader.js"></script>
 
   <script>
     // =========================
@@ -255,7 +255,6 @@
             curBKey = chosen.kb;
           }
 
-          // remover último ponto duplicado
           if (loop.length >= 2) {
             const first = loop[0], last = loop[loop.length-1];
             if (Math.abs(first[0]-last[0])<1e-6 && Math.abs(first[1]-last[1])<1e-6) loop.pop();
@@ -368,13 +367,11 @@
     const dropHint = document.getElementById("dropHint");
     let scene, camera, renderer, currentMesh;
 
-    // objetos colocados
     const placedObjects = [];
-    const placedGroup = new THREE.Group(); // onde ficam os modelos fixos
-    let ghostModel = null;   // segue o rato
-    let pendingModel = null; // pronto a colocar
+    const placedGroup = new THREE.Group();
+    let ghostModel = null;
+    let pendingModel = null;
 
-    // câmara orbit simples
     const camState = { target: null, radius: 18, theta: Math.PI/4, phi: Math.PI/3 };
     function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
 
@@ -390,7 +387,14 @@
     function init3D() {
       try {
         if (!window.THREE) { setStatus3D("ERRO: THREE não carregou"); btn3d.disabled = true; return; }
-        if (!THREE.GLTFLoader) { setStatus3D("ERRO: GLTFLoader não carregou"); return; }
+
+        // ✅ FIX: GLTFLoader pode estar em window.GLTFLoader (global) ou THREE.GLTFLoader
+        const GLTFLoaderCtor = (window.GLTFLoader) || (THREE && THREE.GLTFLoader);
+        if (!GLTFLoaderCtor) {
+          setStatus3D("ERRO: GLTFLoader não carregou (CDN bloqueado ou path errado)");
+          // não desativa o 3D; só desativa o drag-drop de modelos
+          // a extrusão continua a funcionar.
+        }
 
         scene = new THREE.Scene();
         scene.background = new THREE.Color(0xf7f7f7);
@@ -409,7 +413,6 @@
 
         scene.add(new THREE.GridHelper(100, 100));
         scene.add(new THREE.AxesHelper(5));
-
         scene.add(placedGroup);
 
         function resizeRenderer() {
@@ -423,12 +426,12 @@
         setTimeout(resizeRenderer, 0);
         window.addEventListener("resize", resizeRenderer);
 
-        // controlos do rato (câmara) — DESLIGA quando houver pendingModel (para colocar)
+        // controlos do rato (câmara) — desliga quando houver pendingModel
         let dragging = false;
         let lastX = 0, lastY = 0;
 
         renderer.domElement.addEventListener("pointerdown", (e) => {
-          if (pendingModel) return; // se estamos a colocar modelo, não mexe a câmara
+          if (pendingModel) return;
           dragging = true;
           lastX = e.clientX; lastY = e.clientY;
           renderer.domElement.setPointerCapture(e.pointerId);
@@ -457,10 +460,12 @@
         }, { passive: false });
 
         // ===== Drag & Drop =====
-        const loader = new THREE.GLTFLoader();
+        // ✅ FIX: cria loader com o construtor certo
+        const loader = GLTFLoaderCtor ? new GLTFLoaderCtor() : null;
+
         const raycaster = new THREE.Raycaster();
         const mouse = new THREE.Vector2();
-        const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0); // y=0
+        const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 
         function getGroundPointFromEvent(evt) {
           const rect = renderer.domElement.getBoundingClientRect();
@@ -471,7 +476,6 @@
           return raycaster.ray.intersectPlane(groundPlane, p) ? p : null;
         }
 
-        // mostrar hint
         container.addEventListener("dragenter", (e) => { e.preventDefault(); dropHint.style.display = "flex"; });
         container.addEventListener("dragleave", (e) => { e.preventDefault(); dropHint.style.display = "none"; });
         container.addEventListener("dragover", (e) => { e.preventDefault(); });
@@ -479,6 +483,11 @@
         container.addEventListener("drop", (e) => {
           e.preventDefault();
           dropHint.style.display = "none";
+
+          if (!loader) {
+            setStatus3D("GLTFLoader indisponível (CDN bloqueado). Extrusão funciona, mas drag-drop não.");
+            return;
+          }
 
           const file = e.dataTransfer.files?.[0];
           if (!file) return;
@@ -495,13 +504,10 @@
           loader.load(url, (gltf) => {
             URL.revokeObjectURL(url);
 
-            // remove ghost anterior
             if (ghostModel) scene.remove(ghostModel);
 
             ghostModel = gltf.scene;
             ghostModel.name = file.name;
-
-            // escala default (ajusta se o teu modelo vier gigante)
             ghostModel.scale.set(1,1,1);
 
             scene.add(ghostModel);
@@ -514,13 +520,11 @@
           });
         });
 
-        // mover ghost no chão
         renderer.domElement.addEventListener("pointermove", (evt) => {
           if (!pendingModel) return;
           const p = getGroundPointFromEvent(evt);
           if (!p) return;
 
-          // snap ao grid (CELL)
           p.x = Math.round(p.x / CELL) * CELL;
           p.z = Math.round(p.z / CELL) * CELL;
           p.y = 0;
@@ -528,7 +532,6 @@
           pendingModel.position.copy(p);
         });
 
-        // clicar para “fixar” o objeto
         renderer.domElement.addEventListener("pointerdown", (evt) => {
           if (!pendingModel) return;
 
@@ -539,7 +542,6 @@
           p.z = Math.round(p.z / CELL) * CELL;
           p.y = 0;
 
-          // fixa uma cópia (para poderes colocar várias)
           const fixed = pendingModel.clone(true);
           fixed.position.copy(p);
           placedGroup.add(fixed);
@@ -559,7 +561,8 @@
         }
         animate();
 
-        setStatus3D("pronto ✅ — clica 'Ver 3D' ou arrasta um .glb");
+        // se loader falhar, ainda assim deixamos o 3D “pronto” para extrusão
+        setStatus3D(loader ? "pronto ✅ — clica 'Ver 3D' ou arrasta um .glb" : "pronto ✅ — extrusão ok (drag-drop indisponível)");
       } catch (e) {
         console.error(e);
         setStatus3D("ERRO: " + (e?.message || "desconhecido"));
@@ -570,7 +573,6 @@
     function clear3D() {
       if (!scene) return;
 
-      // limpa mesh da extrusão
       if (currentMesh) {
         scene.remove(currentMesh);
         currentMesh.geometry.dispose();
@@ -578,11 +580,9 @@
         currentMesh = null;
       }
 
-      // limpa objetos colocados
       placedGroup.clear();
       placedObjects.length = 0;
 
-      // limpa ghost
       if (ghostModel) scene.remove(ghostModel);
       ghostModel = null;
       pendingModel = null;
@@ -646,7 +646,6 @@
         return;
       }
 
-      // remove só a extrusão (não mexe nos modelos colocados)
       if (currentMesh) {
         scene.remove(currentMesh);
         currentMesh.geometry.dispose();
@@ -672,7 +671,6 @@
       setStatus3D(`gerado ✅ altura=${EXTRUDE_HEIGHT.toFixed(2)}`);
     });
 
-    // Limpar (2D + 3D)
     function clearAll() {
       filled.clear();
       unionPath.setAttribute("d", "");
@@ -687,7 +685,6 @@
   </script>
 </body>
 </html>
-
 
 
 
