@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Retângulo 2D -> Extrusão 3D</title>
+  <title>Salas em Grid -> Extrusão 3D (Unir Áreas)</title>
   <style>
     body { font-family: Arial, sans-serif; margin: 0; }
     header { padding: 12px 16px; border-bottom: 1px solid #ddd; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
@@ -23,14 +23,13 @@
     #three3d {
       flex: 1; width: 100%;
       border: 1px solid #ddd; background: #fff;
-      min-height: 320px; /* garante que nunca fica 0 */
+      min-height: 320px;
       position: relative; overflow: hidden;
     }
 
     button { padding: 8px 12px; }
     .hint { color: #555; font-size: 14px; }
 
-    /* status único mas com duas linhas */
     .status { margin-left: auto; font-size: 12px; color: #333; opacity: 0.85; display: flex; flex-direction: column; gap: 2px; }
     .status-line { white-space: nowrap; }
   </style>
@@ -40,9 +39,8 @@
   <header>
     <button id="btnClear">Limpar</button>
     <button id="btn3d">Ver 3D</button>
-    <span class="hint">Ferramenta Retângulo: clique + arrastar no 2D. Depois ajusta pelos cantos.</span>
+    <span class="hint">Desenha retângulos (tipo Photoshop). Se encostarem, unem num só.</span>
 
-    <!-- STATUS: duas linhas dentro do mesmo container -->
     <span class="status" id="status">
       <span class="status-line" id="status2d">2D: a iniciar…</span>
       <span class="status-line" id="status3d">3D: a iniciar…</span>
@@ -51,23 +49,21 @@
 
   <main>
     <div class="panel">
-      <h3>2D (Topo) — SVG</h3>
+      <h3>2D (Topo) — Grid unido</h3>
       <svg id="svg2d" viewBox="-25 -25 50 50" preserveAspectRatio="xMidYMid meet"></svg>
     </div>
 
     <div class="panel">
-      <h3>3D — Extrusão</h3>
+      <h3>3D — Extrusão (forma unida)</h3>
       <div id="three3d"></div>
     </div>
   </main>
 
-  <!-- Three.js (classic) -->
   <script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
-  <!-- REMOVIDO: OrbitControls (estava a falhar no teu ambiente) -->
 
   <script>
     // =========================
-    // BOOT / DEBUG
+    // STATUS
     // =========================
     const status2dEl = document.getElementById("status2d");
     const status3dEl = document.getElementById("status3d");
@@ -81,15 +77,21 @@
     setStatus3D("a iniciar…");
 
     // =========================
-    // 1) EDITOR 2D (SVG) - RECT TOOL
+    // 1) EDITOR 2D (SVG) + GRID UNION
     // =========================
     const svg = document.getElementById("svg2d");
     const ns = "http://www.w3.org/2000/svg";
 
-    // snap (opcional). Mete 0.25 para 25cm, mete 0 para desligar.
-    const SNAP = 0.25;
+    // Tamanho do “quadrado D&D”
+    const CELL = 1;     // 1 metro/unidade
+    const SNAP = CELL;  // snap = cell (podes separar se quiseres)
 
-    const rectData = { exists: false, x: 0, y: 0, w: 0, h: 0 };
+    // Guardar cells ocupadas
+    const filled = new Set(); // key: "i,j"
+
+    function key(i,j){ return `${i},${j}`; }
+    function has(i,j){ return filled.has(key(i,j)); }
+    function add(i,j){ filled.add(key(i,j)); }
 
     // Fundo clicável
     const bg = document.createElementNS(ns, "rect");
@@ -101,25 +103,20 @@
     bg.style.pointerEvents = "all";
     svg.appendChild(bg);
 
-    // Retângulo desenhado
-    const rectEl = document.createElementNS(ns, "rect");
-    rectEl.setAttribute("fill", "rgba(0,0,0,0.10)");
-    rectEl.setAttribute("stroke", "#111");
-    rectEl.setAttribute("stroke-width", "0.1");
-    rectEl.style.display = "none";
-    svg.appendChild(rectEl);
+    // Preview retângulo (enquanto arrastas)
+    const previewRect = document.createElementNS(ns, "rect");
+    previewRect.setAttribute("fill", "rgba(0,0,0,0.06)");
+    previewRect.setAttribute("stroke", "#111");
+    previewRect.setAttribute("stroke-width", "0.1");
+    previewRect.style.display = "none";
+    svg.appendChild(previewRect);
 
-    // Handles (cantos)
-    const handles = [];
-    for (let i = 0; i < 4; i++) {
-      const c = document.createElementNS(ns, "circle");
-      c.setAttribute("r", "0.35");
-      c.setAttribute("fill", "#111");
-      c.style.display = "none";
-      c.style.cursor = "nwse-resize";
-      svg.appendChild(c);
-      handles.push(c);
-    }
+    // Forma unida (contorno)
+    const unionPath = document.createElementNS(ns, "path");
+    unionPath.setAttribute("fill", "rgba(0,0,0,0.12)");
+    unionPath.setAttribute("stroke", "#111");
+    unionPath.setAttribute("stroke-width", "0.15");
+    svg.appendChild(unionPath);
 
     function roundSnap(v) {
       if (!SNAP) return v;
@@ -144,105 +141,183 @@
       return { x, y, w, h };
     }
 
-    function applyRectToSVG() {
-      if (!rectData.exists) {
-        rectEl.style.display = "none";
-        handles.forEach(h => h.style.display = "none");
+    // Pintar cells a partir de um retângulo (em coords mundo)
+    function commitRectToGrid(r) {
+      if (r.w <= 0 || r.h <= 0) return;
+
+      // converter para índices de cell
+      const x0 = Math.floor(r.x / CELL);
+      const y0 = Math.floor(r.y / CELL);
+      const x1 = Math.ceil((r.x + r.w) / CELL) - 1;
+      const y1 = Math.ceil((r.y + r.h) / CELL) - 1;
+
+      for (let i = x0; i <= x1; i++) {
+        for (let j = y0; j <= y1; j++) {
+          add(i,j);
+        }
+      }
+    }
+
+    // Extrair edges de fronteira do grid (cada cell ocupa [i,i+1]x[j,j+1] em CELL)
+    function buildBoundaryEdges() {
+      // cada edge é [ax,ay] -> [bx,by] em coords mundo
+      const edges = [];
+      for (const k of filled) {
+        const [iStr, jStr] = k.split(",");
+        const i = parseInt(iStr,10);
+        const j = parseInt(jStr,10);
+
+        const x = i * CELL;
+        const y = j * CELL;
+
+        // vizinho vazio -> edge de fronteira
+        // left
+        if (!has(i-1, j)) edges.push([[x, y], [x, y+CELL]]);
+        // right
+        if (!has(i+1, j)) edges.push([[x+CELL, y+CELL], [x+CELL, y]]);
+        // bottom
+        if (!has(i, j-1)) edges.push([[x+CELL, y], [x, y]]);
+        // top
+        if (!has(i, j+1)) edges.push([[x, y+CELL], [x+CELL, y+CELL]]);
+      }
+      return edges;
+    }
+
+    function vkey(x,y){ return `${x.toFixed(6)},${y.toFixed(6)}`; }
+
+    // Transformar edges em loops (polígonos)
+    function edgesToLoops(edges) {
+      // map start -> list of ends
+      const nextMap = new Map();
+      function pushEdge(a,b){
+        const ka = vkey(a[0],a[1]);
+        const kb = vkey(b[0],b[1]);
+        if (!nextMap.has(ka)) nextMap.set(ka, []);
+        nextMap.get(ka).push({ b, kb });
+      }
+      edges.forEach(e => pushEdge(e[0], e[1]));
+
+      const used = new Set(); // key "a->b"
+      function edgeKey(aKey,bKey){ return aKey+"->"+bKey; }
+
+      const loops = [];
+
+      for (const [aKey, outs] of nextMap.entries()) {
+        for (const out of outs) {
+          const ek = edgeKey(aKey, out.kb);
+          if (used.has(ek)) continue;
+
+          // começa loop
+          const loop = [];
+          let curAKey = aKey;
+          let curB = out.b;
+          let curBKey = out.kb;
+
+          // adiciona primeiro ponto
+          {
+            const [ax,ay] = curAKey.split(",").map(Number);
+            loop.push([ax,ay]);
+          }
+
+          // marca e avança
+          used.add(ek);
+
+          // walk até fechar
+          let guard = 0;
+          while (guard++ < 200000) {
+            // adiciona ponto B
+            loop.push([curB[0], curB[1]]);
+
+            if (curBKey === aKey) break; // fechou
+
+            const outs2 = nextMap.get(curBKey);
+            if (!outs2 || outs2.length === 0) break;
+
+            // escolher próxima aresta: como é grid ortogonal, normalmente há 1 saída.
+            // se houver mais, escolhemos a primeira que ainda não foi usada.
+            let chosen = null;
+            for (const cand of outs2) {
+              const ek2 = edgeKey(curBKey, cand.kb);
+              if (!used.has(ek2)) { chosen = cand; used.add(ek2); break; }
+            }
+            if (!chosen) break;
+
+            curAKey = curBKey;
+            curB = chosen.b;
+            curBKey = chosen.kb;
+          }
+
+          // remove último ponto duplicado se fechou
+          if (loop.length >= 2) {
+            const first = loop[0], last = loop[loop.length-1];
+            if (Math.abs(first[0]-last[0])<1e-6 && Math.abs(first[1]-last[1])<1e-6) {
+              loop.pop();
+            }
+          }
+
+          if (loop.length >= 3) loops.push(loop);
+        }
+      }
+
+      return loops;
+    }
+
+    function polygonArea(loop) {
+      let a = 0;
+      for (let i=0;i<loop.length;i++){
+        const [x1,y1] = loop[i];
+        const [x2,y2] = loop[(i+1)%loop.length];
+        a += x1*y2 - x2*y1;
+      }
+      return a/2;
+    }
+
+    function loopsToSvgPath(loops) {
+      // múltiplos subpaths; usa fill-rule evenodd automaticamente com "evenodd"
+      let d = "";
+      for (const loop of loops) {
+        if (loop.length < 3) continue;
+        d += `M ${loop[0][0]} ${loop[0][1]} `;
+        for (let i=1;i<loop.length;i++){
+          d += `L ${loop[i][0]} ${loop[i][1]} `;
+        }
+        d += "Z ";
+      }
+      return d.trim();
+    }
+
+    function redrawUnion() {
+      if (filled.size === 0) {
+        unionPath.setAttribute("d", "");
         return;
       }
+      const edges = buildBoundaryEdges();
+      const loops = edgesToLoops(edges);
 
-      rectEl.style.display = "block";
-      rectEl.setAttribute("x", rectData.x);
-      rectEl.setAttribute("y", rectData.y);
-      rectEl.setAttribute("width", rectData.w);
-      rectEl.setAttribute("height", rectData.h);
+      // Para SVG: desenhar tudo (buracos funcionam melhor com evenodd)
+      unionPath.setAttribute("fill-rule", "evenodd");
+      unionPath.setAttribute("d", loopsToSvgPath(loops));
 
-      const corners = [
-        { x: rectData.x,               y: rectData.y },
-        { x: rectData.x + rectData.w,  y: rectData.y },
-        { x: rectData.x + rectData.w,  y: rectData.y + rectData.h },
-        { x: rectData.x,               y: rectData.y + rectData.h },
-      ];
-
-      corners.forEach((p, i) => {
-        handles[i].style.display = "block";
-        handles[i].setAttribute("cx", p.x);
-        handles[i].setAttribute("cy", p.y);
-      });
+      setStatus2D(`cells=${filled.size} | loops=${loops.length}`);
     }
 
-    // Estados de interação
-    let mode = "idle"; // idle | drawing | resizing
+    // ==============
+    // Desenhar retângulo “Photoshop-style” e COMMIT no fim
+    // ==============
+    let mode = "idle";
     let start = null;
-    let activeHandle = -1;
-    let baseRect = null;
 
-    function beginDrawing(p) {
-      mode = "drawing";
-      start = p;
-
-      rectData.exists = true;
-      rectData.x = p.x;
-      rectData.y = p.y;
-      rectData.w = 0;
-      rectData.h = 0;
-
-      applyRectToSVG();
-      setStatus2D("a desenhar retângulo…");
+    function showPreview(r) {
+      previewRect.style.display = "block";
+      previewRect.setAttribute("x", r.x);
+      previewRect.setAttribute("y", r.y);
+      previewRect.setAttribute("width", r.w);
+      previewRect.setAttribute("height", r.h);
     }
-
-    function updateDrawing(p) {
-      const r = normalizeRect(start.x, start.y, p.x, p.y);
-      rectData.x = r.x;
-      rectData.y = r.y;
-      rectData.w = r.w;
-      rectData.h = r.h;
-      applyRectToSVG();
-      setStatus2D(`rect: w=${rectData.w.toFixed(2)} h=${rectData.h.toFixed(2)}`);
-    }
-
-    function beginResize(handleIndex, p) {
-      mode = "resizing";
-      activeHandle = handleIndex;
-      baseRect = { ...rectData };
-      start = p;
-      setStatus2D("a redimensionar…");
-    }
-
-    function updateResize(p) {
-      const x0 = baseRect.x;
-      const y0 = baseRect.y;
-      const x1 = baseRect.x + baseRect.w;
-      const y1 = baseRect.y + baseRect.h;
-
-      let fixed, moving;
-      if (activeHandle === 0) { fixed = { x: x1, y: y1 }; moving = p; }
-      if (activeHandle === 1) { fixed = { x: x0, y: y1 }; moving = p; }
-      if (activeHandle === 2) { fixed = { x: x0, y: y0 }; moving = p; }
-      if (activeHandle === 3) { fixed = { x: x1, y: y0 }; moving = p; }
-
-      const r = normalizeRect(fixed.x, fixed.y, moving.x, moving.y);
-      rectData.x = r.x;
-      rectData.y = r.y;
-      rectData.w = r.w;
-      rectData.h = r.h;
-      applyRectToSVG();
-      setStatus2D(`rect: w=${rectData.w.toFixed(2)} h=${rectData.h.toFixed(2)}`);
-    }
-
-    function endAction() {
-      mode = "idle";
-      start = null;
-      activeHandle = -1;
-      baseRect = null;
-
-      if (rectData.exists && (rectData.w < 0.01 || rectData.h < 0.01)) {
-        rectData.exists = false;
-      }
-      applyRectToSVG();
-
-      if (rectData.exists) setStatus2D("pronto ✅ retângulo criado");
-      else setStatus2D("pronto ✅");
+    function hidePreview() {
+      previewRect.style.display = "none";
+      previewRect.setAttribute("width", 0);
+      previewRect.setAttribute("height", 0);
     }
 
     bg.addEventListener("pointerdown", (evt) => {
@@ -250,66 +325,71 @@
       const p = svgPointFromMouse(evt);
       if (!p) return;
 
-      beginDrawing(p);
+      mode = "drawing";
+      start = p;
+      showPreview({ x: p.x, y: p.y, w: 0, h: 0 });
+      setStatus2D("a desenhar…");
       svg.setPointerCapture(evt.pointerId);
     });
 
-    handles.forEach((h, idx) => {
-      h.addEventListener("pointerdown", (evt) => {
-        evt.preventDefault();
-        evt.stopPropagation();
-        if (!rectData.exists) return;
-
-        const p = svgPointFromMouse(evt);
-        if (!p) return;
-
-        beginResize(idx, p);
-        svg.setPointerCapture(evt.pointerId);
-      });
-    });
-
     svg.addEventListener("pointermove", (evt) => {
-      if (mode === "idle") return;
+      if (mode !== "drawing") return;
       evt.preventDefault();
       const p = svgPointFromMouse(evt);
       if (!p) return;
 
-      if (mode === "drawing") updateDrawing(p);
-      if (mode === "resizing") updateResize(p);
+      const r = normalizeRect(start.x, start.y, p.x, p.y);
+      showPreview(r);
+      setStatus2D(`preview: w=${r.w.toFixed(2)} h=${r.h.toFixed(2)}`);
     });
 
     svg.addEventListener("pointerup", (evt) => {
-      if (mode === "idle") return;
+      if (mode !== "drawing") return;
       evt.preventDefault();
-      endAction();
+
+      const p = svgPointFromMouse(evt);
+      if (p) {
+        const r = normalizeRect(start.x, start.y, p.x, p.y);
+        if (r.w >= 0.01 && r.h >= 0.01) {
+          commitRectToGrid(r);
+          redrawUnion();
+          setStatus2D("retângulo aplicado ✅ (unido automaticamente)");
+        } else {
+          setStatus2D("demasiado pequeno (ignorado)");
+        }
+      }
+
+      hidePreview();
+      mode = "idle";
+      start = null;
+
       try { svg.releasePointerCapture(evt.pointerId); } catch {}
     });
 
-    // ======== LIMPAR (sempre funcional, antes do 3D) ========
+    // Limpar
     function clearAll() {
-      rectData.exists = false;
-      applyRectToSVG();
-      if (typeof clear3D === "function") clear3D();
+      filled.clear();
+      unionPath.setAttribute("d", "");
+      hidePreview();
+      clear3D();
       setStatus2D("limpo ✅");
       setStatus3D("limpo ✅");
     }
     btnClear.addEventListener("click", clearAll);
 
-    applyRectToSVG();
-    setStatus2D("pronto ✅ desenha um retângulo");
+    setStatus2D("pronto ✅ desenha retângulos");
 
     // =========================
-    // 2) PREVIEW 3D (Three.js) - CONTROLOS SIMPLES (SEM OrbitControls)
+    // 2) PREVIEW 3D (Three.js) - CONTROLOS SIMPLES
     // =========================
     const container = document.getElementById("three3d");
     let scene, camera, renderer, currentMesh;
 
-    // câmara orbit simples
     const camState = {
       target: null,
       radius: 18,
-      theta: Math.PI / 4, // horizontal
-      phi: Math.PI / 3    // vertical
+      theta: Math.PI / 4,
+      phi: Math.PI / 3
     };
 
     function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
@@ -319,7 +399,6 @@
       const x = camState.target.x + camState.radius * sinPhi * Math.cos(camState.theta);
       const z = camState.target.z + camState.radius * sinPhi * Math.sin(camState.theta);
       const y = camState.target.y + camState.radius * Math.cos(camState.phi);
-
       camera.position.set(x, y, z);
       camera.lookAt(camState.target);
     }
@@ -342,13 +421,11 @@
         camState.target = new THREE.Vector3(0, 1.5, 0);
         updateCamera();
 
-        // luzes
         scene.add(new THREE.AmbientLight(0xffffff, 0.7));
         const dir = new THREE.DirectionalLight(0xffffff, 0.7);
         dir.position.set(10, 20, 10);
         scene.add(dir);
 
-        // helpers
         scene.add(new THREE.GridHelper(100, 100));
         scene.add(new THREE.AxesHelper(5));
 
@@ -365,7 +442,7 @@
         setTimeout(resizeRenderer, 0);
         window.addEventListener("resize", resizeRenderer);
 
-        // controlos do rato
+        // mouse controls
         let dragging = false;
         let lastX = 0, lastY = 0;
 
@@ -388,9 +465,7 @@
           updateCamera();
         });
 
-        window.addEventListener("pointerup", () => {
-          dragging = false;
-        });
+        window.addEventListener("pointerup", () => dragging = false);
 
         renderer.domElement.addEventListener("wheel", (e) => {
           e.preventDefault();
@@ -405,7 +480,7 @@
         }
         animate();
 
-        setStatus3D("pronto ✅ (sem OrbitControls) — clica 'Ver 3D'");
+        setStatus3D("pronto ✅ — clica 'Ver 3D'");
       } catch (e) {
         console.error(e);
         setStatus3D("ERRO: " + (e?.message || "desconhecido"));
@@ -421,13 +496,45 @@
       currentMesh = null;
     }
 
-    function buildExtrudedRect3D(r, height = 3) {
+    function loopsFor3D() {
+      if (filled.size === 0) return [];
+      const edges = buildBoundaryEdges();
+      const loops = edgesToLoops(edges);
+
+      // ordenar: maior área (em valor absoluto) como contorno exterior
+      const withArea = loops.map(l => ({ loop: l, area: polygonArea(l) }));
+      withArea.sort((a,b) => Math.abs(b.area) - Math.abs(a.area));
+
+      return withArea.map(x => x.loop);
+    }
+
+    function buildExtrudedFromLoops(loops, height = 3) {
+      if (!loops || loops.length === 0) return null;
+
+      // outer = maior loop
+      const outer = loops[0];
+
+      // garantir orientação: outer deve ser CCW para Three.Shape (normalmente)
+      // Se vier CW, invert
+      if (polygonArea(outer) < 0) outer.reverse();
+
       const shape = new THREE.Shape();
-      shape.moveTo(r.x, r.y);
-      shape.lineTo(r.x + r.w, r.y);
-      shape.lineTo(r.x + r.w, r.y + r.h);
-      shape.lineTo(r.x, r.y + r.h);
+      shape.moveTo(outer[0][0], outer[0][1]);
+      for (let i=1;i<outer.length;i++) shape.lineTo(outer[i][0], outer[i][1]);
       shape.closePath();
+
+      // restantes loops podem ser buracos (se existirem)
+      for (let h=1; h<loops.length; h++) {
+        const hole = loops[h].slice();
+        // buraco deve ser CW
+        if (polygonArea(hole) > 0) hole.reverse();
+
+        const path = new THREE.Path();
+        path.moveTo(hole[0][0], hole[0][1]);
+        for (let i=1;i<hole.length;i++) path.lineTo(hole[i][0], hole[i][1]);
+        path.closePath();
+        shape.holes.push(path);
+      }
 
       const geo = new THREE.ExtrudeGeometry(shape, { depth: height, bevelEnabled: false });
       geo.rotateX(Math.PI / 2);
@@ -435,6 +542,7 @@
       const mat = new THREE.MeshStandardMaterial();
       const mesh = new THREE.Mesh(geo, mat);
 
+      // centrar
       geo.computeBoundingBox();
       const bb = geo.boundingBox;
       const cx = (bb.min.x + bb.max.x) / 2;
@@ -450,27 +558,34 @@
         setStatus3D("ainda não inicializou");
         return;
       }
-
-      if (!rectData.exists || rectData.w <= 0 || rectData.h <= 0) {
-        alert("Desenha um retângulo no 2D primeiro.");
+      if (filled.size === 0) {
+        alert("Desenha pelo menos uma área no 2D primeiro.");
         return;
       }
 
       clear3D();
-      currentMesh = buildExtrudedRect3D(rectData, 3);
+
+      const loops = loopsFor3D();
+      currentMesh = buildExtrudedFromLoops(loops, 3);
+      if (!currentMesh) {
+        setStatus3D("não foi possível gerar forma");
+        return;
+      }
+
       scene.add(currentMesh);
 
-      // reset camera
       camState.target.set(0, 1.5, 0);
-      camState.radius = 18;
+      camState.radius = 22;
       camState.theta = Math.PI / 4;
       camState.phi = Math.PI / 3;
       updateCamera();
 
-      setStatus3D("gerado ✅");
+      setStatus3D("gerado ✅ (forma unida)");
     });
 
     init3D();
   </script>
 </body>
 </html>
+
+
